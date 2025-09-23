@@ -58,13 +58,15 @@ const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: 
       pattern: /(?:src|href|content)=['"](?:\.?\/)?([^"']*\.(css|js|png|jpg|jpeg|gif|svg|webp|ico))["']/gi,
       replacement: (match: string, path: string, ext: string) => {
         // 如果路径已经以 http 开头，不处理
-        if (path.startsWith('http')) return match;
+        if (path.startsWith('http')) {
+          return match.replace(`"${path}`, `"/proxy/${path}`);
+        }
         // 如果路径已经以 / 开头，添加前缀
         if (path.startsWith('/')) {
-          return match.replace(`"/${path.slice(1)}`, `"/hexo/${path.slice(1)}`);
+          return match.replace(`"/${path.slice(1)}`, `"/telegraph/${path.slice(1)}`);
         }
         // 相对路径
-        return match.replace(`"${path}`, `"/hexo/${path}`);
+        return match.replace(`"${path}`, `"/telegraph/${path}`);
       }
     },],
   // hexo 博客特殊处理 (Vercel 部署)
