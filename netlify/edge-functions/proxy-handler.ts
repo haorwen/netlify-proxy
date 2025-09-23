@@ -5,6 +5,7 @@ import type { Context } from "@netlify/edge-functions";
 const PROXY_CONFIG = {
   // API 服务器
   "/discord": "https://discord.com/api",
+  "/telegraph": "https://telegra.ph",
   "/telegram": "https://api.telegram.org",
   "/openai": "https://api.openai.com",
   "/claude": "https://api.anthropic.com",
@@ -51,8 +52,7 @@ const JS_CONTENT_TYPES = [
 
 // 特定网站的替换规则 (针对某些站点的特殊处理)
 const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: Function}>> = {
-  // hexo 博客特殊处理 (Vercel 部署)
-  'hexo-gally.vercel.app': [
+  'telegra.ph': [
     // 替换所有 /css/, /js/, /images/ 等资源路径
     {
       pattern: /(?:src|href|content)=['"](?:\.?\/)?([^"']*\.(css|js|png|jpg|jpeg|gif|svg|webp|ico))["']/gi,
@@ -65,6 +65,22 @@ const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: 
         }
         // 相对路径
         return match.replace(`"${path}`, `"/hexo/${path}`);
+      }
+    },],
+  // hexo 博客特殊处理 (Vercel 部署)
+  'hexo-gally.vercel.app': [
+    // 替换所有 /css/, /js/, /images/ 等资源路径
+    {
+      pattern: /(?:src|href|content)=['"](?:\.?\/)?([^"']*\.(css|js|png|jpg|jpeg|gif|svg|webp|ico))["']/gi,
+      replacement: (match: string, path: string, ext: string) => {
+        // 如果路径已经以 http 开头，不处理
+        if (path.startsWith('http')) return match;
+        // 如果路径已经以 / 开头，添加前缀
+        if (path.startsWith('/')) {
+          return match.replace(`"/${path.slice(1)}`, `"/telegraph/${path.slice(1)}`);
+        }
+        // 相对路径
+        return match.replace(`"${path}`, `"/telegraph/${path}`);
       }
     },
     // 处理内联 CSS 中的 url()
