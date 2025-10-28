@@ -7,6 +7,7 @@ const PROXY_CONFIG = {
   "/discord": "https://discord.com/api",
   "/telegraph": "https://telegra.ph",
   "/vc": "https://vocechat.xf-yun.cn",
+  "/cat-baike": "https://lolitalibrary.com/wiki",
   "/telegram": "https://api.telegram.org",
   "/openai": "https://api.openai.com",
   "/claude": "https://api.anthropic.com",
@@ -85,6 +86,22 @@ const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: 
         }
         // 相对路径
         return match.replace(`"${path}`, `"/vc/${path}`);
+      }
+    },],'lolitalibrary.com': [
+    // 替换所有 /css/, /js/, /images/ 等资源路径
+    {
+      pattern: /(?:src|href|content)=['"](?:\.?\/)?([^"']*\.(css|js|png|jpg|jpeg|gif|svg|webp|ico))["']/gi,
+      replacement: (match: string, path: string, ext: string) => {
+        // 如果路径已经以 http 开头，不处理
+        if (path.startsWith('http')) {
+          return match.replace(`"${path}`, `"/proxy/${path}`);
+        }
+        // 如果路径已经以 / 开头，添加前缀
+        if (path.startsWith('/')) {
+          return match.replace(`"/${path.slice(1)}`, `"/cat-baike/${path.slice(1)}`);
+        }
+        // 相对路径
+        return match.replace(`"${path}`, `"/cat-baike/${path}`);
       }
     },],
   // hexo 博客特殊处理 (Vercel 部署)
