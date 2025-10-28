@@ -7,7 +7,7 @@ const PROXY_CONFIG = {
   "/discord": "https://discord.com/api",
   "/telegraph": "https://telegra.ph",
   "/vc": "https://vocechat.xf-yun.cn",
-  "/cat-baike": "https://lolitalibrary.com/wiki",
+  "/cat-baike": "https://lolitalibrary.com",
   "/telegram": "https://api.telegram.org",
   "/openai": "https://api.openai.com",
   "/claude": "https://api.anthropic.com",
