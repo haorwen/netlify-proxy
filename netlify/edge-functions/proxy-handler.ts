@@ -53,20 +53,26 @@ const JS_CONTENT_TYPES = [
   'application/x-javascript'
 ];
 
-/// 为 mhhf.com 注入的 IndexedDB 工具脚本
+// 为 mhhf.com 注入的 IndexedDB 工具脚本
 const MHHFINJECTION_SCRIPT = `
 <div id="mhhf-db-tool-container">
   <style>
-    /* CSS样式保持不变 */
+    /* CSS样式，为新元素添加了样式 */
     #mhhf-db-tool-btn { position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; background-color: #007bff; color: white; border-radius: 50%; border: none; display: flex; justify-content: center; align-items: center; font-size: 24px; cursor: grab; z-index: 10000; box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: transform 0.1s ease-out; }
     #mhhf-db-tool-panel { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; max-width: 600px; background-color: white; border: 1px solid #ccc; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 10001; padding: 20px; border-radius: 8px; }
     #mhhf-db-tool-panel .panel-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 15px; }
     #mhhf-db-tool-panel .panel-header h3 { margin: 0; }
     #mhhf-db-tool-panel .close-btn { font-size: 24px; border: none; background: none; cursor: pointer; }
     #mhhf-db-tool-panel textarea { width: 100%; box-sizing: border-box; height: 300px; margin-top: 10px; font-family: monospace; }
-    #mhhf-db-tool-panel .actions { margin-top: 15px; display: flex; gap: 10px; }
-    #mhhf-db-tool-panel .actions button { padding: 8px 12px; border: 1px solid #ccc; background-color: #f0f0f0; cursor: pointer; border-radius: 4px; }
-    #mhhf-db-tool-panel .actions button:hover { background-color: #e0e0e0; }
+    #mhhf-db-tool-panel .actions { margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; }
+    #mhhf-db-tool-panel .actions button:disabled { cursor: not-allowed; background-color: #e9ecef; }
+    #mhhf-db-tool-panel #mhhf-confirm-section { display: none; margin-top: 15px; padding: 10px; border: 1px solid #fd7e14; border-radius: 4px; background-color: #fff4e6; }
+    #mhhf-db-tool-panel #mhhf-confirm-section p { margin: 0 0 10px 0; font-size: 14px; color: #d9480f;}
+    #mhhf-db-tool-panel #mhhf-confirm-actions button { margin-right: 10px; }
+    #mhhf-db-tool-panel button { padding: 8px 12px; border: 1px solid #ccc; background-color: #f0f0f0; cursor: pointer; border-radius: 4px; }
+    #mhhf-db-tool-panel button:hover:not(:disabled) { background-color: #e0e0e0; }
+    #mhhf-db-tool-panel #mhhf-confirm-import-btn { background-color: #fa5252; color: white; border-color: #fa5252; }
+    #mhhf-db-tool-panel #mhhf-confirm-import-btn:hover { background-color: #c92a2a; }
     #mhhf-db-tool-panel .status { margin-top: 10px; font-size: 14px; color: #333; }
   </style>
 
@@ -76,32 +82,61 @@ const MHHFINJECTION_SCRIPT = `
     <div class="panel-header"><h3>IndexedDB 数据工具</h3><button class="close-btn" id="mhhf-close-panel-btn">&times;</button></div>
     <div class="content">
       <textarea id="mhhf-data-area" placeholder="导出数据将显示在此处，或在此处粘贴数据以导入。"></textarea>
-      <div class="actions"><button id="mhhf-export-btn">导出全部数据</button><button id="mhhf-import-btn">导入数据</button></div>
-      <div id="mhhf-status-area" class="status">准备就绪. (v5: Out-of-line key fix)</div>
+      
+      <div id="mhhf-actions-section" class="actions">
+        <button id="mhhf-export-btn">导出数据</button>
+        <button id="mhhf-paste-btn">粘贴</button>
+        <button id="mhhf-copy-btn" disabled>复制</button>
+        <button id="mhhf-import-btn">导入数据</button>
+      </div>
+
+      <div id="mhhf-confirm-section">
+        <p><strong>警告：</strong>此操作将覆盖现有数据且无法撤销。确定要继续吗？</p>
+        <div id="mhhf-confirm-actions">
+          <button id="mhhf-confirm-import-btn">确认导入</button>
+          <button id="mhhf-cancel-import-btn">取消</button>
+        </div>
+      </div>
+
+      <div id="mhhf-status-area" class="status">准备就绪. (v7: Paste & Context Menu Fix)</div>
     </div>
   </div>
 </div>
 
 <script>
   (function() {
-    // UI 逻辑部分 (保持不变)
+    // === UI Element References ===
     const btn = document.getElementById('mhhf-db-tool-btn');
     const panel = document.getElementById('mhhf-db-tool-panel');
     const closeBtn = document.getElementById('mhhf-close-panel-btn');
     const exportBtn = document.getElementById('mhhf-export-btn');
     const importBtn = document.getElementById('mhhf-import-btn');
+    const copyBtn = document.getElementById('mhhf-copy-btn');
+    const pasteBtn = document.getElementById('mhhf-paste-btn');
     const dataArea = document.getElementById('mhhf-data-area');
     const statusArea = document.getElementById('mhhf-status-area');
+    const actionsSection = document.getElementById('mhhf-actions-section');
+    const confirmSection = document.getElementById('mhhf-confirm-section');
+    const confirmImportBtn = document.getElementById('mhhf-confirm-import-btn');
+    const cancelImportBtn = document.getElementById('mhhf-cancel-import-btn');
+
+    // === Draggable Button & Panel Visibility Logic ===
     let isDragging = false, wasDragged = false, initialX, initialY, currentX, currentY, xOffset = 0, yOffset = 0;
     btn.addEventListener('mousedown', (e) => { isDragging = true; wasDragged = false; initialX = e.clientX - xOffset; initialY = e.clientY - yOffset; btn.style.cursor = 'grabbing'; });
     document.addEventListener('mousemove', (e) => { if (!isDragging) return; wasDragged = true; e.preventDefault(); currentX = e.clientX - initialX; currentY = e.clientY - initialY; xOffset = currentX; yOffset = currentY; btn.style.transform = \`translate(\${currentX}px, \${currentY}px)\`; });
     document.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; initialX = currentX; initialY = currentY; btn.style.cursor = 'grab'; } });
     btn.addEventListener('click', () => { if (!wasDragged) { panel.style.display = panel.style.display === 'block' ? 'none' : 'block'; } });
     closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
+
+    // === Context Menu Fix ===
+    // 阻止右键菜单事件冒泡到上层，从而恢复在面板内的右键功能
+    panel.addEventListener('contextmenu', (event) => {
+        event.stopPropagation();
+    });
+
+    // === Helper & Serialization Functions ===
     const setStatus = (msg, isError = false) => { statusArea.textContent = msg; statusArea.style.color = isError ? 'red' : 'green'; };
     const promisifyRequest = (request) => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
-    
-    // 序列化/反序列化逻辑 (保持不变)
     function isBinaryIshString(str) { return /[\\x00-\\x08\\x0B\\x0E-\\x1F\\x7F-\\x9F]/.test(str); }
     function stringToBase64(str) { const bytes = new Uint8Array(str.length); for (let i = 0; i < str.length; i++) { bytes[i] = str.charCodeAt(i); } let binary = ''; for (let i = 0; i < bytes.byteLength; i++) { binary += String.fromCharCode(bytes[i]); } return window.btoa(binary); }
     function base64ToString(base64) { const binaryString = window.atob(base64); const bytes = new Uint8Array(binaryString.length); for(let i = 0; i < binaryString.length; i++) { bytes[i] = binaryString.charCodeAt(i); } return String.fromCharCode.apply(null, bytes); }
@@ -128,9 +163,54 @@ const MHHFINJECTION_SCRIPT = `
         return value;
     }
 
-    // =======================================================================
-    // == 核心改动 v5: Export / Import 函数现在处理 key-value 对
-    // =======================================================================
+    // === UI Interaction Logic ===
+    function resetUiToActions() {
+        confirmSection.style.display = 'none';
+        actionsSection.style.display = 'flex';
+        dataArea.readOnly = false;
+    }
+
+    importBtn.addEventListener('click', () => {
+        if (!dataArea.value.trim()) { setStatus('导入失败: 文本框为空。', true); return; }
+        actionsSection.style.display = 'none';
+        confirmSection.style.display = 'block';
+        dataArea.readOnly = true;
+    });
+
+    cancelImportBtn.addEventListener('click', () => {
+        resetUiToActions();
+        setStatus('导入已取消。');
+    });
+
+    copyBtn.addEventListener('click', () => {
+        if (!dataArea.value) return;
+        navigator.clipboard.writeText(dataArea.value).then(() => {
+            setStatus('已成功复制到剪贴板！');
+        }).catch(err => {
+            setStatus('复制失败: ' + err.message, true);
+        });
+    });
+
+    pasteBtn.addEventListener('click', async () => {
+        try {
+            if (!navigator.clipboard || !navigator.clipboard.readText) {
+                throw new Error('浏览器不支持剪贴板读取 API。');
+            }
+            const text = await navigator.clipboard.readText();
+            dataArea.value = text;
+            setStatus('已从剪贴板粘贴。');
+            copyBtn.disabled = dataArea.value.trim() === '';
+        } catch (err) {
+            setStatus('粘贴失败: ' + err.message, true);
+            console.error('Paste Error:', err);
+        }
+    });
+
+    dataArea.addEventListener('input', () => {
+        copyBtn.disabled = dataArea.value.trim() === '';
+    });
+
+    // === Core IndexedDB Functions ===
 
     async function exportAllData() {
         setStatus('开始导出...');
@@ -148,45 +228,40 @@ const MHHFINJECTION_SCRIPT = `
                 const transaction = db.transaction(storeNames, 'readonly');
                 for (const storeName of storeNames) {
                     const store = transaction.objectStore(storeName);
-                    
-                    // **核心修复：同时获取 keys 和 values**
                     const keys = await promisifyRequest(store.getAllKeys());
                     const values = await promisifyRequest(store.getAll());
-
-                    // 序列化 keys 和 values
                     const serializedKeys = await serializeAsync(keys);
                     const serializedValues = await serializeAsync(values);
-
-                    // 将它们组合成 {key, value} 对的数组
-                    dbData[storeName] = serializedKeys.map((key, index) => ({
-                        key: key,
-                        value: serializedValues[index]
-                    }));
+                    dbData[storeName] = serializedKeys.map((key, index) => ({ key: key, value: serializedValues[index] }));
                 }
                 allData[dbInfo.name] = dbData;
                 db.close();
                 exportedDbCount++;
             }
-            if (exportedDbCount > 0) { dataArea.value = JSON.stringify(allData, null, 2); setStatus(\`成功导出 \${exportedDbCount} 个数据库的数据！\`); } 
-            else { setStatus('没有找到包含任何数据的数据库。', true); }
+            if (exportedDbCount > 0) {
+                dataArea.value = JSON.stringify(allData, null, 2);
+                copyBtn.disabled = false;
+                setStatus(\`成功导出 \${exportedDbCount} 个数据库的数据！\`);
+            } else {
+                setStatus('没有找到包含任何数据的数据库。', true);
+            }
         } catch (error) {
             setStatus('导出失败: ' + error.message, true);
             console.error('Export Error:', error);
         }
     }
-
-    async function importAllData() {
-        const jsonText = dataArea.value;
-        if (!jsonText.trim()) { setStatus('导入失败: 文本框为空。', true); return; }
+    
+    async function executeImport() {
         setStatus('开始导入...');
         let dataToImport;
         try {
-            dataToImport = JSON.parse(jsonText, deserializeReviver);
+            dataToImport = JSON.parse(dataArea.value, deserializeReviver);
         } catch(e) {
             setStatus('导入失败: 无效的 JSON 格式或解析错误。', true);
             console.error('Parse Error:', e);
             return;
         }
+
         try {
             for (const dbName in dataToImport) {
                 if (!Object.prototype.hasOwnProperty.call(dataToImport, dbName)) continue;
@@ -199,15 +274,11 @@ const MHHFINJECTION_SCRIPT = `
                 for (const storeName of validStoreNames) {
                     const store = transaction.objectStore(storeName);
                     await promisifyRequest(store.clear());
-
-                    // **核心修复：使用 put(value, key) 的双参数形式**
                     const pairs = dataToImport[dbName][storeName];
                     if (Array.isArray(pairs)) {
                         pairs.forEach(pair => {
-                            if (pair.key !== undefined && pair.value !== undefined) {
-                                store.put(pair.value, pair.key);
-                            }
-                         });
+                            if (pair && pair.key !== undefined && pair.value !== undefined) store.put(pair.value, pair.key);
+                        });
                     }
                 }
                 await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = reject; });
@@ -219,13 +290,18 @@ const MHHFINJECTION_SCRIPT = `
             console.error('Import Error:', error);
         }
     }
+    
+    confirmImportBtn.addEventListener('click', async () => {
+        await executeImport();
+        resetUiToActions();
+    });
 
     exportBtn.addEventListener('click', exportAllData);
-    importBtn.addEventListener('click', importAllData);
 
   })();
 <\/script>
 `;
+
 
 
 
