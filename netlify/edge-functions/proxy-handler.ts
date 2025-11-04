@@ -54,9 +54,11 @@ const JS_CONTENT_TYPES = [
 ];
 
 // 为 mhhf.com 注入的 IndexedDB 工具脚本
+// 为 mhhf.com 注入的 IndexedDB 工具脚本
 const MHHFINJECTION_SCRIPT = `
 <div id="mhhf-db-tool-container">
   <style>
+    /* CSS样式保持不变 */
     #mhhf-db-tool-btn {
       position: fixed;
       bottom: 20px;
@@ -132,7 +134,9 @@ const MHHFINJECTION_SCRIPT = `
       color: #333;
     }
   </style>
+
   <button id="mhhf-db-tool-btn">⚙️</button>
+
   <div id="mhhf-db-tool-panel">
     <div class="panel-header">
       <h3>IndexedDB 数据工具</h3>
@@ -144,10 +148,11 @@ const MHHFINJECTION_SCRIPT = `
         <button id="mhhf-export-btn">导出全部数据</button>
         <button id="mhhf-import-btn">导入数据</button>
       </div>
-      <div id="mhhf-status-area" class="status">准备就绪.</div>
+      <div id="mhhf-status-area" class="status">准备就绪. (支持二进制数据)</div>
     </div>
   </div>
 </div>
+
 <script>
   (function() {
     const btn = document.getElementById('mhhf-db-tool-btn');
@@ -158,90 +163,134 @@ const MHHFINJECTION_SCRIPT = `
     const dataArea = document.getElementById('mhhf-data-area');
     const statusArea = document.getElementById('mhhf-status-area');
     
-    let isDragging = false;
-    let wasDragged = false;
-    let initialX, initialY, currentX, currentY, xOffset = 0, yOffset = 0;
-    
-    // --- 拖动逻辑 ---
-    btn.addEventListener('mousedown', (e) => {
-      isDragging = true;
-      wasDragged = false;
-      initialX = e.clientX - xOffset;
-      initialY = e.clientY - yOffset;
-      btn.style.cursor = 'grabbing';
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      wasDragged = true;
-      e.preventDefault();
-      currentX = e.clientX - initialX;
-      currentY = e.clientY - initialY;
-      xOffset = currentX;
-      yOffset = currentY;
-      btn.style.transform = \`translate(\${currentX}px, \${currentY}px)\`;
-    });
-    document.addEventListener('mouseup', () => {
-      if (isDragging) {
-        isDragging = false;
-        initialX = currentX;
-        initialY = currentY;
-        btn.style.cursor = 'grab';
-      }
-    });
-    // --- 显隐逻辑 (优化) ---
-    btn.addEventListener('click', (e) => {
-      if (wasDragged) {
-        return; // 如果刚刚是拖拽动作，则不触发点击
-      }
-      panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
-    });
-    
-    closeBtn.addEventListener('click', () => {
-      panel.style.display = 'none';
-    });
+    // UI 拖动和显隐逻辑 (保持不变)
+    let isDragging = false, wasDragged = false, initialX, initialY, currentX, currentY, xOffset = 0, yOffset = 0;
+    btn.addEventListener('mousedown', (e) => { isDragging = true; wasDragged = false; initialX = e.clientX - xOffset; initialY = e.clientY - yOffset; btn.style.cursor = 'grabbing'; });
+    document.addEventListener('mousemove', (e) => { if (!isDragging) return; wasDragged = true; e.preventDefault(); currentX = e.clientX - initialX; currentY = e.clientY - initialY; xOffset = currentX; yOffset = currentY; btn.style.transform = \`translate(\${currentX}px, \${currentY}px)\`; });
+    document.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; initialX = currentX; initialY = currentY; btn.style.cursor = 'grab'; } });
+    btn.addEventListener('click', () => { if (!wasDragged) { panel.style.display = panel.style.display === 'block' ? 'none' : 'block'; } });
+    closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
+
     const setStatus = (msg, isError = false) => {
         statusArea.textContent = msg;
         statusArea.style.color = isError ? 'red' : 'green';
     }
-    // --- IndexedDB 核心逻辑 ---
+
     const promisifyRequest = (request) => new Promise((resolve, reject) => {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
     });
-    async function exportAllData() {
-        setStatus('开始导出...');
-        try {
-            if (!('indexedDB' in window)) {
-                throw new Error('浏览器不支持 IndexedDB。');
+
+    // =======================================================================
+    // == 核心改动：二进制数据处理 (Serialization & Deserialization)
+    // =======================================================================
+
+    // 辅助函数：ArrayBuffer -> Base64
+    function arrayBufferToBase64(buffer) {
+        let binary = '';
+        const bytes = new Uint8Array(buffer);
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return window.btoa(binary);
+    }
+
+    // 辅助函数：Base64 -> ArrayBuffer
+    function base64ToArrayBuffer(base64) {
+        const binary_string = window.atob(base64);
+        const len = binary_string.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binary_string.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+
+    /**
+     * 异步递归序列化器：遍历数据，将二进制格式转换为可JSON化的Base64对象
+     * @param {*} data 任何类型的数据
+     * @returns {Promise<*>} 一个保证可以被JSON.stringify处理的数据
+     */
+    async function serializeAsync(data) {
+        if (data instanceof Blob) {
+            const buffer = await data.arrayBuffer();
+            return {
+                "$type": "blob",
+                "$mime": data.type,
+                "$data": arrayBufferToBase64(buffer)
+            };
+        }
+        if (data instanceof ArrayBuffer) {
+            return {
+                "$type": "arraybuffer",
+                "$data": arrayBufferToBase64(data)
+            };
+        }
+        if (Array.isArray(data)) {
+            return Promise.all(data.map(serializeAsync));
+        }
+        if (data && typeof data === 'object' && Object.prototype.toString.call(data) === '[object Object]') {
+            const obj = {};
+            for (const key in data) {
+                if (Object.prototype.hasOwnProperty.call(data, key)) {
+                    obj[key] = await serializeAsync(data[key]);
+                }
             }
-            // 健壮性增强：处理 indexedDB.databases() 不存在的情况
+            return obj;
+        }
+        return data; // Primitives
+    }
+
+    /**
+     * JSON.parse的 'reviver' 函数，用于反序列化，将Base64对象转换回二进制格式
+     * @param {*} key 
+     * @param {*} value 
+     */
+    function deserializeReviver(key, value) {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            if (value['$type'] === 'blob' && value['$data']) {
+                const buffer = base64ToArrayBuffer(value['$data']);
+                return new Blob([buffer], { type: value['$mime'] });
+            }
+            if (value['$type'] === 'arraybuffer' && value['$data']) {
+                return base64ToArrayBuffer(value['$data']);
+            }
+        }
+        return value;
+    }
+
+    // =======================================================================
+    // == 更新后的 Export / Import 函数
+    // =======================================================================
+
+    async function exportAllData() {
+        setStatus('开始导出 (含二进制数据处理)...');
+        try {
+            if (!('indexedDB' in window)) throw new Error('浏览器不支持 IndexedDB。');
             const dbsInfo = window.indexedDB.databases ? await window.indexedDB.databases() : [];
             if (!dbsInfo || dbsInfo.length === 0) {
-              setStatus('未找到任何 IndexedDB 数据库。请先与网站交互以创建数据库。', true);
+              setStatus('未找到任何 IndexedDB 数据库。', true);
               return;
             }
+
             const allData = {};
             let exportedDbCount = 0;
+
             for (const dbInfo of dbsInfo) {
                 const dbName = dbInfo.name;
-                if (!dbName) continue; // 跳过无效的数据库信息
+                if (!dbName) continue;
                 const db = await promisifyRequest(indexedDB.open(dbName));
                 const storeNames = Array.from(db.objectStoreNames);
-                
-                // ================== 核心修复 ==================
-                // 如果数据库没有任何对象存储，则跳过，防止事务错误
-                if (storeNames.length === 0) {
-                    console.log(\`Skipping database "\${dbName}" because it has no object stores.\`);
-                    db.close();
-                    continue;
-                }
-                // ============================================
+                if (storeNames.length === 0) { db.close(); continue; }
+
                 const dbData = {};
                 const transaction = db.transaction(storeNames, 'readonly');
                 for (const storeName of storeNames) {
                     const store = transaction.objectStore(storeName);
                     const records = await promisifyRequest(store.getAll());
-                    dbData[storeName] = records;
+                    // 在这里使用异步序列化器
+                    dbData[storeName] = await serializeAsync(records);
                 }
                 allData[dbName] = dbData;
                 db.close();
@@ -249,6 +298,7 @@ const MHHFINJECTION_SCRIPT = `
             }
             
             if (exportedDbCount > 0) {
+                // 现在allData是100% JSON安全的，所以可以直接stringify
                 dataArea.value = JSON.stringify(allData, null, 2);
                 setStatus(\`成功导出 \${exportedDbCount} 个数据库的数据！\`);
             } else {
@@ -259,26 +309,32 @@ const MHHFINJECTION_SCRIPT = `
             console.error('Export Error:', error);
         }
     }
+
     async function importAllData() {
         const jsonText = dataArea.value;
         if (!jsonText.trim()) {
             setStatus('导入失败: 文本框为空。', true);
             return;
         }
-        // 健壮性增强：增加安全确认
+
         if (!confirm('【警告】这将清空现有数据并用文本框中的内容替换。确定要继续吗？')) {
             setStatus('导入已取消。');
             return;
         }
-        setStatus('开始导入...');
+
+        setStatus('开始导入 (含二进制数据处理)...');
         let dataToImport;
         try {
-            dataToImport = JSON.parse(jsonText);
+            // 在这里使用 'reviver' 函数进行解析
+            dataToImport = JSON.parse(jsonText, deserializeReviver);
         } catch(e) {
-            setStatus('导入失败: 无效的 JSON 格式。', true);
+            setStatus('导入失败: 无效的 JSON 格式或解析错误。', true);
+            console.error('Parse Error:', e);
             return;
         }
+
         try {
+            // 后续的导入逻辑不变，因为它现在接收的是已经正确转换了类型的dataToImport对象
             for (const dbName in dataToImport) {
                 if (!Object.prototype.hasOwnProperty.call(dataToImport, dbName)) continue;
                 
@@ -287,11 +343,7 @@ const MHHFINJECTION_SCRIPT = `
                 const availableStoreNames = Array.from(db.objectStoreNames);
                 const validStoreNames = storeNamesToImport.filter(name => availableStoreNames.includes(name));
                 
-                if (validStoreNames.length === 0) {
-                    console.warn(\`Skipping DB "\${dbName}" as no matching object stores were found in the current browser.\`);
-                    db.close();
-                    continue;
-                }
+                if (validStoreNames.length === 0) { db.close(); continue; }
                 const transaction = db.transaction(validStoreNames, 'readwrite');
                 
                 for (const storeName of validStoreNames) {
@@ -299,9 +351,7 @@ const MHHFINJECTION_SCRIPT = `
                     await promisifyRequest(store.clear());
                     const records = dataToImport[dbName][storeName];
                     if (Array.isArray(records)) {
-                        records.forEach(record => {
-                            store.put(record); // 使用 put 更安全，可以处理带 key 的情况
-                        });
+                        records.forEach(record => store.put(record));
                     }
                 }
                 
@@ -309,7 +359,6 @@ const MHHFINJECTION_SCRIPT = `
                   transaction.oncomplete = resolve;
                   transaction.onerror = reject;
                 });
-                
                 db.close();
             }
             setStatus('导入成功！页面可能需要刷新以应用更改。');
@@ -318,11 +367,14 @@ const MHHFINJECTION_SCRIPT = `
             console.error('Import Error:', error);
         }
     }
+
     exportBtn.addEventListener('click', exportAllData);
     importBtn.addEventListener('click', importAllData);
+
   })();
 <\/script>
 `;
+
 
 // 特定网站的替换规则 (针对某些站点的特殊处理)
 const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: Function}>> = {
