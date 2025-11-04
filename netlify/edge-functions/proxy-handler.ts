@@ -132,9 +132,7 @@ const MHHFINJECTION_SCRIPT = `
       color: #333;
     }
   </style>
-
   <button id="mhhf-db-tool-btn">⚙️</button>
-
   <div id="mhhf-db-tool-panel">
     <div class="panel-header">
       <h3>IndexedDB 数据工具</h3>
@@ -150,7 +148,6 @@ const MHHFINJECTION_SCRIPT = `
     </div>
   </div>
 </div>
-
 <script>
   (function() {
     const btn = document.getElementById('mhhf-db-tool-btn');
@@ -173,7 +170,6 @@ const MHHFINJECTION_SCRIPT = `
       initialY = e.clientY - yOffset;
       btn.style.cursor = 'grabbing';
     });
-
     document.addEventListener('mousemove', (e) => {
       if (!isDragging) return;
       wasDragged = true;
@@ -184,18 +180,18 @@ const MHHFINJECTION_SCRIPT = `
       yOffset = currentY;
       btn.style.transform = \`translate(\${currentX}px, \${currentY}px)\`;
     });
-
     document.addEventListener('mouseup', () => {
-      isDragging = false;
-      initialX = currentX;
-      initialY = currentY;
-      btn.style.cursor = 'grab';
+      if (isDragging) {
+        isDragging = false;
+        initialX = currentX;
+        initialY = currentY;
+        btn.style.cursor = 'grab';
+      }
     });
-
-    // --- 显隐逻辑 ---
+    // --- 显隐逻辑 (优化) ---
     btn.addEventListener('click', (e) => {
       if (wasDragged) {
-        return;
+        return; // 如果刚刚是拖拽动作，则不触发点击
       }
       panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
     });
@@ -203,40 +199,44 @@ const MHHFINJECTION_SCRIPT = `
     closeBtn.addEventListener('click', () => {
       panel.style.display = 'none';
     });
-
     const setStatus = (msg, isError = false) => {
         statusArea.textContent = msg;
         statusArea.style.color = isError ? 'red' : 'green';
     }
-
     // --- IndexedDB 核心逻辑 ---
-    // Helper to promisify IndexedDB requests
     const promisifyRequest = (request) => new Promise((resolve, reject) => {
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
     });
-
     async function exportAllData() {
         setStatus('开始导出...');
         try {
             if (!('indexedDB' in window)) {
                 throw new Error('浏览器不支持 IndexedDB。');
             }
+            // 健壮性增强：处理 indexedDB.databases() 不存在的情况
             const dbsInfo = window.indexedDB.databases ? await window.indexedDB.databases() : [];
             if (!dbsInfo || dbsInfo.length === 0) {
-              setStatus('未找到任何 IndexedDB 数据库。请与网站交互以创建数据库。', true);
+              setStatus('未找到任何 IndexedDB 数据库。请先与网站交互以创建数据库。', true);
               return;
             }
-
             const allData = {};
-
+            let exportedDbCount = 0;
             for (const dbInfo of dbsInfo) {
                 const dbName = dbInfo.name;
-                if (!dbName) continue;
+                if (!dbName) continue; // 跳过无效的数据库信息
                 const db = await promisifyRequest(indexedDB.open(dbName));
                 const storeNames = Array.from(db.objectStoreNames);
+                
+                // ================== 核心修复 ==================
+                // 如果数据库没有任何对象存储，则跳过，防止事务错误
+                if (storeNames.length === 0) {
+                    console.log(\`Skipping database "\${dbName}" because it has no object stores.\`);
+                    db.close();
+                    continue;
+                }
+                // ============================================
                 const dbData = {};
-
                 const transaction = db.transaction(storeNames, 'readonly');
                 for (const storeName of storeNames) {
                     const store = transaction.objectStore(storeName);
@@ -245,28 +245,31 @@ const MHHFINJECTION_SCRIPT = `
                 }
                 allData[dbName] = dbData;
                 db.close();
+                exportedDbCount++;
             }
-
-            dataArea.value = JSON.stringify(allData, null, 2);
-            setStatus('导出成功！');
+            
+            if (exportedDbCount > 0) {
+                dataArea.value = JSON.stringify(allData, null, 2);
+                setStatus(\`成功导出 \${exportedDbCount} 个数据库的数据！\`);
+            } else {
+                setStatus('没有找到包含任何数据的数据库。', true);
+            }
         } catch (error) {
             setStatus('导出失败: ' + error.message, true);
             console.error('Export Error:', error);
         }
     }
-
     async function importAllData() {
         const jsonText = dataArea.value;
         if (!jsonText.trim()) {
             setStatus('导入失败: 文本框为空。', true);
             return;
         }
-
-        if (!confirm('这将清空现有数据并用文本框中的内容替换。确定要继续吗？')) {
+        // 健壮性增强：增加安全确认
+        if (!confirm('【警告】这将清空现有数据并用文本框中的内容替换。确定要继续吗？')) {
             setStatus('导入已取消。');
             return;
         }
-
         setStatus('开始导入...');
         let dataToImport;
         try {
@@ -275,7 +278,6 @@ const MHHFINJECTION_SCRIPT = `
             setStatus('导入失败: 无效的 JSON 格式。', true);
             return;
         }
-
         try {
             for (const dbName in dataToImport) {
                 if (!Object.prototype.hasOwnProperty.call(dataToImport, dbName)) continue;
@@ -283,14 +285,13 @@ const MHHFINJECTION_SCRIPT = `
                 const db = await promisifyRequest(indexedDB.open(dbName));
                 const storeNamesToImport = Object.keys(dataToImport[dbName]);
                 const availableStoreNames = Array.from(db.objectStoreNames);
-
                 const validStoreNames = storeNamesToImport.filter(name => availableStoreNames.includes(name));
+                
                 if (validStoreNames.length === 0) {
-                    console.warn(\`Skipping DB "\${dbName}" as no matching object stores were found.\`);
+                    console.warn(\`Skipping DB "\${dbName}" as no matching object stores were found in the current browser.\`);
                     db.close();
                     continue;
                 }
-
                 const transaction = db.transaction(validStoreNames, 'readwrite');
                 
                 for (const storeName of validStoreNames) {
@@ -299,7 +300,7 @@ const MHHFINJECTION_SCRIPT = `
                     const records = dataToImport[dbName][storeName];
                     if (Array.isArray(records)) {
                         records.forEach(record => {
-                            store.put(record);
+                            store.put(record); // 使用 put 更安全，可以处理带 key 的情况
                         });
                     }
                 }
@@ -317,10 +318,8 @@ const MHHFINJECTION_SCRIPT = `
             console.error('Import Error:', error);
         }
     }
-
     exportBtn.addEventListener('click', exportAllData);
     importBtn.addEventListener('click', importAllData);
-
   })();
 <\/script>
 `;
