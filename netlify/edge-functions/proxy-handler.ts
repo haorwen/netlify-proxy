@@ -337,7 +337,7 @@ export default async (request: Request, context: Context) => {
   const path = url.pathname;
 
   // *** 新增：特殊处理 /mhhf/export 路径，返回工具页面 ***
-  if (path === '/mhhf/export') {
+  if (path === '/indexdb/export') {
     context.log("Serving IndexedDB tool page.");
     return new Response(INDEXEDDB_TOOL_HTML, {
       status: 200,
