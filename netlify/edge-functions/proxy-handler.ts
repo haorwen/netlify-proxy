@@ -54,7 +54,7 @@ const JS_CONTENT_TYPES = [
 ];
 
 // =============================================================
-// == 注入脚本替换部分：从 v8 升级到 v9 (Iframe)
+// == 注入脚本 v9.1: 修复了拖拽逻辑中的引用错误
 // =============================================================
 
 // 这是将要注入到 Iframe 内部的 HTML 结构
@@ -77,7 +77,7 @@ const TOOL_HTML = `
           <button id="mhhf-cancel-import-btn">取消</button>
         </div>
       </div>
-      <div id="mhhf-status-area" class="status">准备就绪. (v9: Iframe Sandbox)</div>
+      <div id="mhhf-status-area" class="status">准备就绪. (v9.1: Drag Fix)</div>
     </div>
   </div>
 `;
@@ -115,26 +115,44 @@ const TOOL_JS = `
       return;
     }
     const btn = document.getElementById('mhhf-db-tool-btn'), panel = document.getElementById('mhhf-db-tool-panel'), closeBtn = document.getElementById('mhhf-close-panel-btn'), exportBtn = document.getElementById('mhhf-export-btn'), importBtn = document.getElementById('mhhf-import-btn'), copyBtn = document.getElementById('mhhf-copy-btn'), pasteBtn = document.getElementById('mhhf-paste-btn'), dataArea = document.getElementById('mhhf-data-area'), statusArea = document.getElementById('mhhf-status-area'), actionsSection = document.getElementById('mhhf-actions-section'), confirmSection = document.getElementById('mhhf-confirm-section'), confirmImportBtn = document.getElementById('mhhf-confirm-import-btn'), cancelImportBtn = document.getElementById('mhhf-cancel-import-btn');
+    
+    // === Draggable Button & Panel Visibility Logic (FIXED) ===
     let isDragging = false, wasDragged = false, initialX, initialY, currentX, currentY, xOffset = 0, yOffset = 0;
     btn.addEventListener('mousedown', (e) => { isDragging = true; wasDragged = false; initialX = e.clientX - xOffset; initialY = e.clientY - yOffset; btn.style.cursor = 'grabbing'; });
     document.addEventListener('mousemove', (e) => { if (!isDragging) return; wasDragged = true; e.preventDefault(); currentX = e.clientX - initialX; currentY = e.clientY - initialY; xOffset = currentX; yOffset = currentY; btn.style.transform = \`translate(\${currentX}px, \${currentY}px)\`; });
-    document.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; initialX = currentX; initialY = currentY; btn.style.cursor = 'grab'; } });
+    // *** BUG FIX STARTS HERE ***
+    // The original code had redundant and faulty lines here.
+    // They are removed to prevent ReferenceError on click without drag.
+    document.addEventListener('mouseup', () => { 
+        if (isDragging) { 
+            isDragging = false; 
+            btn.style.cursor = 'grab'; 
+        } 
+    });
+    // *** BUG FIX ENDS HERE ***
     btn.addEventListener('click', () => { if (!wasDragged) { panel.style.display = panel.style.display === 'block' ? 'none' : 'block'; } });
     closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
+
+    // === Helper & Serialization Functions ===
     const setStatus = (msg, isError = false) => { statusArea.textContent = msg; statusArea.style.color = isError ? 'red' : 'green'; };
     const promisifyRequest = (request) => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
     function arrayBufferToBase64(buffer) { let b='';new Uint8Array(buffer).forEach(B=>{b+=String.fromCharCode(B)}); return window.btoa(b) }
     function base64ToArrayBuffer(base64) { const s=window.atob(base64),b=new Uint8Array(s.length);for(let i=0;i<s.length;i++){b[i]=s.charCodeAt(i)}return b.buffer }
     async function serializeAsync(data) { if (data instanceof Blob) return { "$type": "blob", "$mime": data.type, "$data": arrayBufferToBase64(await data.arrayBuffer()) }; if (data instanceof ArrayBuffer) return { "$type": "arraybuffer", "$data": arrayBufferToBase64(data) }; if (Array.isArray(data)) return Promise.all(data.map(serializeAsync)); if (data && typeof data === 'object' && data.constructor === Object) { const obj = {}; for (const key in data) { obj[key] = await serializeAsync(data[key]); } return obj; } return data; }
     function deserializeReviver(key, value) { if (value && typeof value === 'object' && !Array.isArray(value)) { if (value['$type'] === 'blob') return new Blob([base64ToArrayBuffer(value['$data'])], { type: value['$mime'] }); if (value['$type'] === 'arraybuffer') return base64ToArrayBuffer(value['$data']); } return value; }
+    
+    // === UI Interaction Logic ===
     function resetUiToActions() { confirmSection.style.display = 'none'; actionsSection.style.display = 'flex'; dataArea.readOnly = false; }
     importBtn.addEventListener('click', () => { if (!dataArea.value.trim()) { setStatus('导入失败: 文本框为空。', true); return; } actionsSection.style.display = 'none'; confirmSection.style.display = 'block'; dataArea.readOnly = true; });
     cancelImportBtn.addEventListener('click', () => { resetUiToActions(); setStatus('导入已取消。'); });
     copyBtn.addEventListener('click', () => { if (!dataArea.value) return; navigator.clipboard.writeText(dataArea.value).then(() => { setStatus('已成功复制到剪贴板！'); }).catch(err => { setStatus('复制失败: ' + err.message, true); }); });
     pasteBtn.addEventListener('click', async () => { try { if (!navigator.clipboard || !navigator.clipboard.readText) { throw new Error('浏览器不支持剪贴板读取 API。'); } const text = await navigator.clipboard.readText(); dataArea.value = text; setStatus('已从剪贴板粘贴。'); copyBtn.disabled = dataArea.value.trim() === ''; } catch (err) { setStatus('粘贴失败: ' + err.message, true); console.error('Paste Error:', err); } });
     dataArea.addEventListener('input', () => { copyBtn.disabled = dataArea.value.trim() === ''; });
+
+    // === Core IndexedDB Functions ===
     async function exportAllData() { setStatus('开始导出...'); try { const dbsInfo = await indexedDB.databases(); if (!dbsInfo || dbsInfo.length === 0) { setStatus('未找到任何 IndexedDB 数据库。', true); return; } let allData = {}, exportedDbCount = 0; for (const dbInfo of dbsInfo) { if (!dbInfo.name) continue; const db = await promisifyRequest(indexedDB.open(dbInfo.name)); const storeNames = Array.from(db.objectStoreNames); if (storeNames.length === 0) { db.close(); continue; } const dbData = {}; const transaction = db.transaction(storeNames, 'readonly'); for (const storeName of storeNames) { const store = transaction.objectStore(storeName); const keys = await promisifyRequest(store.getAllKeys()); const values = await promisifyRequest(store.getAll()); const serializedKeys = await serializeAsync(keys); const serializedValues = await serializeAsync(values); dbData[storeName] = serializedKeys.map((key, index) => ({ key: key, value: serializedValues[index] })); } allData[dbInfo.name] = dbData; db.close(); exportedDbCount++; } if (exportedDbCount > 0) { dataArea.value = JSON.stringify(allData, null, 2); copyBtn.disabled = false; setStatus(\`成功导出 \${exportedDbCount} 个数据库的数据！\`); } else { setStatus('没有找到包含任何数据的数据库。', true); } } catch (error) { setStatus('导出失败: ' + error.message, true); console.error('Export Error:', error); } }
     async function executeImport() { setStatus('开始导入...'); let dataToImport; try { dataToImport = JSON.parse(dataArea.value, deserializeReviver); } catch(e) { setStatus('导入失败: 无效的 JSON 格式或解析错误。', true); console.error('Parse Error:', e); return; } try { for (const dbName in dataToImport) { if (!Object.prototype.hasOwnProperty.call(dataToImport, dbName)) continue; const db = await promisifyRequest(indexedDB.open(dbName)); const storeNamesToImport = Object.keys(dataToImport[dbName]); const availableStoreNames = Array.from(db.objectStoreNames); const validStoreNames = storeNamesToImport.filter(name => availableStoreNames.includes(name)); if (validStoreNames.length === 0) { db.close(); continue; } const transaction = db.transaction(validStoreNames, 'readwrite'); for (const storeName of validStoreNames) { const store = transaction.objectStore(storeName); await promisifyRequest(store.clear()); const pairs = dataToImport[dbName][storeName]; if (Array.isArray(pairs)) { pairs.forEach(pair => { if (pair && pair.key !== undefined && pair.value !== undefined) store.put(pair.value, pair.key); }); } } await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = reject; }); db.close(); } setStatus('导入成功！页面可能需要刷新以应用更改。'); } catch (error) { setStatus('导入失败: ' + error.message, true); console.error('Import Error:', error); } }
+    
     confirmImportBtn.addEventListener('click', async () => { await executeImport(); resetUiToActions(); });
     exportBtn.addEventListener('click', exportAllData);
   })();
@@ -220,7 +238,7 @@ const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: 
         return match.replace(`"${path}`, `"/vc/${path}`);
       }
     },
-  ], // <--- 修正了这里的语法错误
+  ],
   'lolitalibrary.com': [
     {
       pattern: /(?:src|href|content)=['"](?:\.?\/)?([^"']*\.(css|js|png|jpg|jpeg|gif|svg|webp|ico))["']/gi,
@@ -545,7 +563,7 @@ export default async (request: Request, context: Context) => {
 
           // **针对 mhhf.com，注入 IndexedDB 工具**
           if (targetDomain === 'www.mhhf.com') {
-            injectedContent += MHHFINJECTION_SCRIPT; // <--- 这里使用新的 Iframe 注入脚本
+            injectedContent += MHHFINJECTION_SCRIPT;
           }
           
           const bodyCloseTagPos = content.lastIndexOf('</body>');
