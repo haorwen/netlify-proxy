@@ -81,10 +81,10 @@ const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: 
         if (path.startsWith('http')) {
           return match.replace(`"${path}`, `"/proxy/${path}`);
         }
-        // // 如果路径已经以 / 开头，添加前缀
-        // if (path.startsWith('/')) {
-        //   return match.replace(`"/${path.slice(1)}`, `"/mhhf/${path.slice(1)}`);
-        // }
+        // 如果路径已经以 / 开头，添加前缀
+        if (path.startsWith('/')) {
+          return match.replace(`"/${path.slice(1)}`, `"/mhhf/${path.slice(1)}`);
+        }
         // 相对路径
         return match.replace(`"${path}`, `"/mhhf/${path}`);
       }
@@ -549,10 +549,6 @@ export default async (request: Request, context: Context) => {
                   if (resource.includes('/_next/data/') && !resource.startsWith('/hexo')) {
                     resource = '/hexo' + resource;
                   }
-                  // 其他 API 请求
-                  if (resource.startsWith('/api/') && !resource.startsWith('/hexo')) {
-                    resource = '/hexo' + resource;
-                  }
                 }
                 return originalFetch.call(this, resource, init);
               };
@@ -604,7 +600,7 @@ export default async (request: Request, context: Context) => {
                         ['src', 'href', 'data-src', 'data-href'].forEach(function(attr) {
                           if (el.hasAttribute(attr)) {
                             let val = el.getAttribute(attr);
-                            if (val && !val.match(/^(https?:|\/\/|${url.origin})/)) {
+                            if (val && !val.startsWith("https://netlify-rev")) {
                               if (val.startsWith('/')) {
                                 if (window.location.pathname.startsWith('/hexo') && val.startsWith('/_next/') && !val.startsWith('/hexo')) {
                                   el.setAttribute(attr, '/hexo' + val);
