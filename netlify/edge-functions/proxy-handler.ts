@@ -53,11 +53,11 @@ const JS_CONTENT_TYPES = [
   'application/x-javascript'
 ];
 
-// 为 mhhf.com 注入的 IndexedDB 工具脚本
+// 为 mhhf.com 注入的 IndexedDB 工具脚本 (最终版 v8)
 const MHHFINJECTION_SCRIPT = `
 <div id="mhhf-db-tool-container">
   <style>
-    /* CSS样式，为新元素添加了样式 */
+    /* CSS样式 */
     #mhhf-db-tool-btn { position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; background-color: #007bff; color: white; border-radius: 50%; border: none; display: flex; justify-content: center; align-items: center; font-size: 24px; cursor: grab; z-index: 10000; box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: transform 0.1s ease-out; }
     #mhhf-db-tool-panel { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; max-width: 600px; background-color: white; border: 1px solid #ccc; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 10001; padding: 20px; border-radius: 8px; }
     #mhhf-db-tool-panel .panel-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 15px; }
@@ -75,21 +75,17 @@ const MHHFINJECTION_SCRIPT = `
     #mhhf-db-tool-panel #mhhf-confirm-import-btn:hover { background-color: #c92a2a; }
     #mhhf-db-tool-panel .status { margin-top: 10px; font-size: 14px; color: #333; }
   </style>
-
   <button id="mhhf-db-tool-btn">⚙️</button>
-
   <div id="mhhf-db-tool-panel">
     <div class="panel-header"><h3>IndexedDB 数据工具</h3><button class="close-btn" id="mhhf-close-panel-btn">&times;</button></div>
     <div class="content">
       <textarea id="mhhf-data-area" placeholder="导出数据将显示在此处，或在此处粘贴数据以导入。"></textarea>
-      
       <div id="mhhf-actions-section" class="actions">
         <button id="mhhf-export-btn">导出数据</button>
         <button id="mhhf-paste-btn">粘贴</button>
         <button id="mhhf-copy-btn" disabled>复制</button>
         <button id="mhhf-import-btn">导入数据</button>
       </div>
-
       <div id="mhhf-confirm-section">
         <p><strong>警告：</strong>此操作将覆盖现有数据且无法撤销。确定要继续吗？</p>
         <div id="mhhf-confirm-actions">
@@ -97,15 +93,14 @@ const MHHFINJECTION_SCRIPT = `
           <button id="mhhf-cancel-import-btn">取消</button>
         </div>
       </div>
-
-      <div id="mhhf-status-area" class="status">准备就绪. (v7: Paste & Context Menu Fix)</div>
+      <div id="mhhf-status-area" class="status">准备就绪. (v8: Final Interaction Fix)</div>
     </div>
   </div>
 </div>
-
 <script>
   (function() {
     // === UI Element References ===
+    const toolContainer = document.getElementById('mhhf-db-tool-container'); // Get the outermost container
     const btn = document.getElementById('mhhf-db-tool-btn');
     const panel = document.getElementById('mhhf-db-tool-panel');
     const closeBtn = document.getElementById('mhhf-close-panel-btn');
@@ -119,7 +114,16 @@ const MHHFINJECTION_SCRIPT = `
     const confirmSection = document.getElementById('mhhf-confirm-section');
     const confirmImportBtn = document.getElementById('mhhf-confirm-import-btn');
     const cancelImportBtn = document.getElementById('mhhf-cancel-import-btn');
-
+    // =================================================================
+    // == 核心修复：创建事件“黑洞”，阻止所有交互事件向上冒泡
+    // =================================================================
+    const eventsToStop = ['click', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'contextmenu', 'pointerdown', 'pointerup'];
+    eventsToStop.forEach(eventName => {
+      toolContainer.addEventListener(eventName, (event) => {
+        event.stopPropagation();
+      });
+    });
+    // =================================================================
     // === Draggable Button & Panel Visibility Logic ===
     let isDragging = false, wasDragged = false, initialX, initialY, currentX, currentY, xOffset = 0, yOffset = 0;
     btn.addEventListener('mousedown', (e) => { isDragging = true; wasDragged = false; initialX = e.clientX - xOffset; initialY = e.clientY - yOffset; btn.style.cursor = 'grabbing'; });
@@ -127,13 +131,7 @@ const MHHFINJECTION_SCRIPT = `
     document.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; initialX = currentX; initialY = currentY; btn.style.cursor = 'grab'; } });
     btn.addEventListener('click', () => { if (!wasDragged) { panel.style.display = panel.style.display === 'block' ? 'none' : 'block'; } });
     closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
-
-    // === Context Menu Fix ===
-    // 阻止右键菜单事件冒泡到上层，从而恢复在面板内的右键功能
-    panel.addEventListener('contextmenu', (event) => {
-        event.stopPropagation();
-    });
-
+    
     // === Helper & Serialization Functions ===
     const setStatus = (msg, isError = false) => { statusArea.textContent = msg; statusArea.style.color = isError ? 'red' : 'green'; };
     const promisifyRequest = (request) => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
@@ -142,170 +140,24 @@ const MHHFINJECTION_SCRIPT = `
     function base64ToString(base64) { const binaryString = window.atob(base64); const bytes = new Uint8Array(binaryString.length); for(let i = 0; i < binaryString.length; i++) { bytes[i] = binaryString.charCodeAt(i); } return String.fromCharCode.apply(null, bytes); }
     function arrayBufferToBase64(buffer) { let b='';new Uint8Array(buffer).forEach(B=>{b+=String.fromCharCode(B)}); return window.btoa(b) }
     function base64ToArrayBuffer(base64) { const s=window.atob(base64),b=new Uint8Array(s.length);for(let i=0;i<s.length;i++){b[i]=s.charCodeAt(i)}return b.buffer }
-    async function serializeAsync(data) {
-        if (data instanceof Blob) return { "$type": "blob", "$mime": data.type, "$data": arrayBufferToBase64(await data.arrayBuffer()) };
-        if (data instanceof ArrayBuffer) return { "$type": "arraybuffer", "$data": arrayBufferToBase64(data) };
-        if (typeof data === 'string' && isBinaryIshString(data)) return { "$type": "binary-string", "$data": stringToBase64(data) };
-        if (Array.isArray(data)) return Promise.all(data.map(serializeAsync));
-        if (data && typeof data === 'object' && Object.prototype.toString.call(data) === '[object Object]') {
-            const obj = {};
-            for (const key in data) { if (Object.prototype.hasOwnProperty.call(data, key)) obj[key] = await serializeAsync(data[key]); }
-            return obj;
-        }
-        return data;
-    }
-    function deserializeReviver(key, value) {
-        if (value && typeof value === 'object' && !Array.isArray(value)) {
-            if (value['$type'] === 'blob') return new Blob([base64ToArrayBuffer(value['$data'])], { type: value['$mime'] });
-            if (value['$type'] === 'arraybuffer') return base64ToArrayBuffer(value['$data']);
-            if (value['$type'] === 'binary-string') return base64ToString(value['$data']);
-        }
-        return value;
-    }
-
+    async function serializeAsync(data) { if (data instanceof Blob) return { "$type": "blob", "$mime": data.type, "$data": arrayBufferToBase64(await data.arrayBuffer()) }; if (data instanceof ArrayBuffer) return { "$type": "arraybuffer", "$data": arrayBufferToBase64(data) }; if (typeof data === 'string' && isBinaryIshString(data)) return { "$type": "binary-string", "$data": stringToBase64(data) }; if (Array.isArray(data)) return Promise.all(data.map(serializeAsync)); if (data && typeof data === 'object' && Object.prototype.toString.call(data) === '[object Object]') { const obj = {}; for (const key in data) { if (Object.prototype.hasOwnProperty.call(data, key)) obj[key] = await serializeAsync(data[key]); } return obj; } return data; }
+    function deserializeReviver(key, value) { if (value && typeof value === 'object' && !Array.isArray(value)) { if (value['$type'] === 'blob') return new Blob([base64ToArrayBuffer(value['$data'])], { type: value['$mime'] }); if (value['$type'] === 'arraybuffer') return base64ToArrayBuffer(value['$data']); if (value['$type'] === 'binary-string') return base64ToString(value['$data']); } return value; }
     // === UI Interaction Logic ===
-    function resetUiToActions() {
-        confirmSection.style.display = 'none';
-        actionsSection.style.display = 'flex';
-        dataArea.readOnly = false;
-    }
-
-    importBtn.addEventListener('click', () => {
-        if (!dataArea.value.trim()) { setStatus('导入失败: 文本框为空。', true); return; }
-        actionsSection.style.display = 'none';
-        confirmSection.style.display = 'block';
-        dataArea.readOnly = true;
-    });
-
-    cancelImportBtn.addEventListener('click', () => {
-        resetUiToActions();
-        setStatus('导入已取消。');
-    });
-
-    copyBtn.addEventListener('click', () => {
-        if (!dataArea.value) return;
-        navigator.clipboard.writeText(dataArea.value).then(() => {
-            setStatus('已成功复制到剪贴板！');
-        }).catch(err => {
-            setStatus('复制失败: ' + err.message, true);
-        });
-    });
-
-    pasteBtn.addEventListener('click', async () => {
-        try {
-            if (!navigator.clipboard || !navigator.clipboard.readText) {
-                throw new Error('浏览器不支持剪贴板读取 API。');
-            }
-            const text = await navigator.clipboard.readText();
-            dataArea.value = text;
-            setStatus('已从剪贴板粘贴。');
-            copyBtn.disabled = dataArea.value.trim() === '';
-        } catch (err) {
-            setStatus('粘贴失败: ' + err.message, true);
-            console.error('Paste Error:', err);
-        }
-    });
-
-    dataArea.addEventListener('input', () => {
-        copyBtn.disabled = dataArea.value.trim() === '';
-    });
-
+    function resetUiToActions() { confirmSection.style.display = 'none'; actionsSection.style.display = 'flex'; dataArea.readOnly = false; }
+    importBtn.addEventListener('click', () => { if (!dataArea.value.trim()) { setStatus('导入失败: 文本框为空。', true); return; } actionsSection.style.display = 'none'; confirmSection.style.display = 'block'; dataArea.readOnly = true; });
+    cancelImportBtn.addEventListener('click', () => { resetUiToActions(); setStatus('导入已取消。'); });
+    copyBtn.addEventListener('click', () => { if (!dataArea.value) return; navigator.clipboard.writeText(dataArea.value).then(() => { setStatus('已成功复制到剪贴板！'); }).catch(err => { setStatus('复制失败: ' + err.message, true); }); });
+    pasteBtn.addEventListener('click', async () => { try { if (!navigator.clipboard || !navigator.clipboard.readText) { throw new Error('浏览器不支持剪贴板读取 API。'); } const text = await navigator.clipboard.readText(); dataArea.value = text; setStatus('已从剪贴板粘贴。'); copyBtn.disabled = dataArea.value.trim() === ''; } catch (err) { setStatus('粘贴失败: ' + err.message, true); console.error('Paste Error:', err); } });
+    dataArea.addEventListener('input', () => { copyBtn.disabled = dataArea.value.trim() === ''; });
     // === Core IndexedDB Functions ===
-
-    async function exportAllData() {
-        setStatus('开始导出...');
-        try {
-            if (!('indexedDB' in window)) throw new Error('浏览器不支持 IndexedDB。');
-            const dbsInfo = window.indexedDB.databases ? await window.indexedDB.databases() : [];
-            if (!dbsInfo || dbsInfo.length === 0) { setStatus('未找到任何 IndexedDB 数据库。', true); return; }
-            let allData = {}, exportedDbCount = 0;
-            for (const dbInfo of dbsInfo) {
-                if (!dbInfo.name) continue;
-                const db = await promisifyRequest(indexedDB.open(dbInfo.name));
-                const storeNames = Array.from(db.objectStoreNames);
-                if (storeNames.length === 0) { db.close(); continue; }
-                const dbData = {};
-                const transaction = db.transaction(storeNames, 'readonly');
-                for (const storeName of storeNames) {
-                    const store = transaction.objectStore(storeName);
-                    const keys = await promisifyRequest(store.getAllKeys());
-                    const values = await promisifyRequest(store.getAll());
-                    const serializedKeys = await serializeAsync(keys);
-                    const serializedValues = await serializeAsync(values);
-                    dbData[storeName] = serializedKeys.map((key, index) => ({ key: key, value: serializedValues[index] }));
-                }
-                allData[dbInfo.name] = dbData;
-                db.close();
-                exportedDbCount++;
-            }
-            if (exportedDbCount > 0) {
-                dataArea.value = JSON.stringify(allData, null, 2);
-                copyBtn.disabled = false;
-                setStatus(\`成功导出 \${exportedDbCount} 个数据库的数据！\`);
-            } else {
-                setStatus('没有找到包含任何数据的数据库。', true);
-            }
-        } catch (error) {
-            setStatus('导出失败: ' + error.message, true);
-            console.error('Export Error:', error);
-        }
-    }
+    async function exportAllData() { setStatus('开始导出...'); try { if (!('indexedDB' in window)) throw new Error('浏览器不支持 IndexedDB。'); const dbsInfo = window.indexedDB.databases ? await window.indexedDB.databases() : []; if (!dbsInfo || dbsInfo.length === 0) { setStatus('未找到任何 IndexedDB 数据库。', true); return; } let allData = {}, exportedDbCount = 0; for (const dbInfo of dbsInfo) { if (!dbInfo.name) continue; const db = await promisifyRequest(indexedDB.open(dbInfo.name)); const storeNames = Array.from(db.objectStoreNames); if (storeNames.length === 0) { db.close(); continue; } const dbData = {}; const transaction = db.transaction(storeNames, 'readonly'); for (const storeName of storeNames) { const store = transaction.objectStore(storeName); const keys = await promisifyRequest(store.getAllKeys()); const values = await promisifyRequest(store.getAll()); const serializedKeys = await serializeAsync(keys); const serializedValues = await serializeAsync(values); dbData[storeName] = serializedKeys.map((key, index) => ({ key: key, value: serializedValues[index] })); } allData[dbInfo.name] = dbData; db.close(); exportedDbCount++; } if (exportedDbCount > 0) { dataArea.value = JSON.stringify(allData, null, 2); copyBtn.disabled = false; setStatus(\`成功导出 \${exportedDbCount} 个数据库的数据！\`); } else { setStatus('没有找到包含任何数据的数据库。', true); } } catch (error) { setStatus('导出失败: ' + error.message, true); console.error('Export Error:', error); } }
+    async function executeImport() { setStatus('开始导入...'); let dataToImport; try { dataToImport = JSON.parse(dataArea.value, deserializeReviver); } catch(e) { setStatus('导入失败: 无效的 JSON 格式或解析错误。', true); console.error('Parse Error:', e); return; } try { for (const dbName in dataToImport) { if (!Object.prototype.hasOwnProperty.call(dataToImport, dbName)) continue; const db = await promisifyRequest(indexedDB.open(dbName)); const storeNamesToImport = Object.keys(dataToImport[dbName]); const availableStoreNames = Array.from(db.objectStoreNames); const validStoreNames = storeNamesToImport.filter(name => availableStoreNames.includes(name)); if (validStoreNames.length === 0) { db.close(); continue; } const transaction = db.transaction(validStoreNames, 'readwrite'); for (const storeName of validStoreNames) { const store = transaction.objectStore(storeName); await promisifyRequest(store.clear()); const pairs = dataToImport[dbName][storeName]; if (Array.isArray(pairs)) { pairs.forEach(pair => { if (pair && pair.key !== undefined && pair.value !== undefined) store.put(pair.value, pair.key); }); } } await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = reject; }); db.close(); } setStatus('导入成功！页面可能需要刷新以应用更改。'); } catch (error) { setStatus('导入失败: ' + error.message, true); console.error('Import Error:', error); } }
     
-    async function executeImport() {
-        setStatus('开始导入...');
-        let dataToImport;
-        try {
-            dataToImport = JSON.parse(dataArea.value, deserializeReviver);
-        } catch(e) {
-            setStatus('导入失败: 无效的 JSON 格式或解析错误。', true);
-            console.error('Parse Error:', e);
-            return;
-        }
-
-        try {
-            for (const dbName in dataToImport) {
-                if (!Object.prototype.hasOwnProperty.call(dataToImport, dbName)) continue;
-                const db = await promisifyRequest(indexedDB.open(dbName));
-                const storeNamesToImport = Object.keys(dataToImport[dbName]);
-                const availableStoreNames = Array.from(db.objectStoreNames);
-                const validStoreNames = storeNamesToImport.filter(name => availableStoreNames.includes(name));
-                if (validStoreNames.length === 0) { db.close(); continue; }
-                const transaction = db.transaction(validStoreNames, 'readwrite');
-                for (const storeName of validStoreNames) {
-                    const store = transaction.objectStore(storeName);
-                    await promisifyRequest(store.clear());
-                    const pairs = dataToImport[dbName][storeName];
-                    if (Array.isArray(pairs)) {
-                        pairs.forEach(pair => {
-                            if (pair && pair.key !== undefined && pair.value !== undefined) store.put(pair.value, pair.key);
-                        });
-                    }
-                }
-                await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = reject; });
-                db.close();
-            }
-            setStatus('导入成功！页面可能需要刷新以应用更改。');
-        } catch (error) {
-            setStatus('导入失败: ' + error.message, true);
-            console.error('Import Error:', error);
-        }
-    }
-    
-    confirmImportBtn.addEventListener('click', async () => {
-        await executeImport();
-        resetUiToActions();
-    });
-
+    confirmImportBtn.addEventListener('click', async () => { await executeImport(); resetUiToActions(); });
     exportBtn.addEventListener('click', exportAllData);
-
   })();
 <\/script>
 `;
-
-
-
-
-
 
 // 特定网站的替换规则 (针对某些站点的特殊处理)
 const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: Function}>> = {
