@@ -53,7 +53,7 @@ const JS_CONTENT_TYPES = [
   'application/x-javascript'
 ];
 
-// 为 mhhf.com 注入的 IndexedDB 工具脚本
+/// 为 mhhf.com 注入的 IndexedDB 工具脚本
 const MHHFINJECTION_SCRIPT = `
 <div id="mhhf-db-tool-container">
   <style>
@@ -77,7 +77,7 @@ const MHHFINJECTION_SCRIPT = `
     <div class="content">
       <textarea id="mhhf-data-area" placeholder="导出数据将显示在此处，或在此处粘贴数据以导入。"></textarea>
       <div class="actions"><button id="mhhf-export-btn">导出全部数据</button><button id="mhhf-import-btn">导入数据</button></div>
-      <div id="mhhf-status-area" class="status">准备就绪. (v4: Regex fix)</div>
+      <div id="mhhf-status-area" class="status">准备就绪. (v5: Out-of-line key fix)</div>
     </div>
   </div>
 </div>
@@ -101,39 +101,12 @@ const MHHFINJECTION_SCRIPT = `
     const setStatus = (msg, isError = false) => { statusArea.textContent = msg; statusArea.style.color = isError ? 'red' : 'green'; };
     const promisifyRequest = (request) => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
     
-    // =======================================================================
-    // == 核心改动 v4：修复正则表达式的转义问题
-    // =======================================================================
-    
-    function isBinaryIshString(str) {
-        // C0 and C1 control characters, except for HT, LF, CR, and FF
-        // **修正：对反斜杠进行转义，以防止在字符串模板中被提前解析**
-        return /[\\x00-\\x08\\x0B\\x0E-\\x1F\\x7F-\\x9F]/.test(str);
-    }
-
-    // 字符串 -> ArrayBuffer -> Base64
-    function stringToBase64(str) {
-        const bytes = new Uint8Array(str.length);
-        for (let i = 0; i < str.length; i++) { bytes[i] = str.charCodeAt(i); }
-        let binary = '';
-        const len = bytes.byteLength;
-        for (let i = 0; i < len; i++) { binary += String.fromCharCode(bytes[i]); }
-        return window.btoa(binary);
-    }
-
-    // Base64 -> ArrayBuffer -> 字符串
-    function base64ToString(base64) {
-        const binaryString = window.atob(base64);
-        const bytes = new Uint8Array(binaryString.length);
-        for(let i = 0; i < binaryString.length; i++) { bytes[i] = binaryString.charCodeAt(i); }
-        return String.fromCharCode.apply(null, bytes);
-    }
-    
-    // 其他二进制数据的转换 (保持不变)
+    // 序列化/反序列化逻辑 (保持不变)
+    function isBinaryIshString(str) { return /[\\x00-\\x08\\x0B\\x0E-\\x1F\\x7F-\\x9F]/.test(str); }
+    function stringToBase64(str) { const bytes = new Uint8Array(str.length); for (let i = 0; i < str.length; i++) { bytes[i] = str.charCodeAt(i); } let binary = ''; for (let i = 0; i < bytes.byteLength; i++) { binary += String.fromCharCode(bytes[i]); } return window.btoa(binary); }
+    function base64ToString(base64) { const binaryString = window.atob(base64); const bytes = new Uint8Array(binaryString.length); for(let i = 0; i < binaryString.length; i++) { bytes[i] = binaryString.charCodeAt(i); } return String.fromCharCode.apply(null, bytes); }
     function arrayBufferToBase64(buffer) { let b='';new Uint8Array(buffer).forEach(B=>{b+=String.fromCharCode(B)}); return window.btoa(b) }
     function base64ToArrayBuffer(base64) { const s=window.atob(base64),b=new Uint8Array(s.length);for(let i=0;i<s.length;i++){b[i]=s.charCodeAt(i)}return b.buffer }
-
-
     async function serializeAsync(data) {
         if (data instanceof Blob) return { "$type": "blob", "$mime": data.type, "$data": arrayBufferToBase64(await data.arrayBuffer()) };
         if (data instanceof ArrayBuffer) return { "$type": "arraybuffer", "$data": arrayBufferToBase64(data) };
@@ -141,25 +114,22 @@ const MHHFINJECTION_SCRIPT = `
         if (Array.isArray(data)) return Promise.all(data.map(serializeAsync));
         if (data && typeof data === 'object' && Object.prototype.toString.call(data) === '[object Object]') {
             const obj = {};
-            for (const key in data) {
-                if (Object.prototype.hasOwnProperty.call(data, key)) obj[key] = await serializeAsync(data[key]);
-            }
+            for (const key in data) { if (Object.prototype.hasOwnProperty.call(data, key)) obj[key] = await serializeAsync(data[key]); }
             return obj;
         }
         return data;
     }
-
     function deserializeReviver(key, value) {
         if (value && typeof value === 'object' && !Array.isArray(value)) {
-            if (value['$type'] === 'blob' && value['$data']) return new Blob([base64ToArrayBuffer(value['$data'])], { type: value['$mime'] });
-            if (value['$type'] === 'arraybuffer' && value['$data']) return base64ToArrayBuffer(value['$data']);
-            if (value['$type'] === 'binary-string' && value['$data']) return base64ToString(value['$data']);
+            if (value['$type'] === 'blob') return new Blob([base64ToArrayBuffer(value['$data'])], { type: value['$mime'] });
+            if (value['$type'] === 'arraybuffer') return base64ToArrayBuffer(value['$data']);
+            if (value['$type'] === 'binary-string') return base64ToString(value['$data']);
         }
         return value;
     }
 
     // =======================================================================
-    // == Export / Import 函数 (逻辑不变，但现在依赖新的序列化/反序列化函数)
+    // == 核心改动 v5: Export / Import 函数现在处理 key-value 对
     // =======================================================================
 
     async function exportAllData() {
@@ -178,8 +148,20 @@ const MHHFINJECTION_SCRIPT = `
                 const transaction = db.transaction(storeNames, 'readonly');
                 for (const storeName of storeNames) {
                     const store = transaction.objectStore(storeName);
-                    const records = await promisifyRequest(store.getAll());
-                    dbData[storeName] = await serializeAsync(records);
+                    
+                    // **核心修复：同时获取 keys 和 values**
+                    const keys = await promisifyRequest(store.getAllKeys());
+                    const values = await promisifyRequest(store.getAll());
+
+                    // 序列化 keys 和 values
+                    const serializedKeys = await serializeAsync(keys);
+                    const serializedValues = await serializeAsync(values);
+
+                    // 将它们组合成 {key, value} 对的数组
+                    dbData[storeName] = serializedKeys.map((key, index) => ({
+                        key: key,
+                        value: serializedValues[index]
+                    }));
                 }
                 allData[dbInfo.name] = dbData;
                 db.close();
@@ -196,6 +178,7 @@ const MHHFINJECTION_SCRIPT = `
     async function importAllData() {
         const jsonText = dataArea.value;
         if (!jsonText.trim()) { setStatus('导入失败: 文本框为空。', true); return; }
+        if (!confirm('【警告】这将清空现有数据并用文本框中的内容替换。确定要继续吗？')) { setStatus('导入已取消。'); return; }
         setStatus('开始导入...');
         let dataToImport;
         try {
@@ -217,8 +200,16 @@ const MHHFINJECTION_SCRIPT = `
                 for (const storeName of validStoreNames) {
                     const store = transaction.objectStore(storeName);
                     await promisifyRequest(store.clear());
-                    const records = dataToImport[dbName][storeName];
-                    if (Array.isArray(records)) { records.forEach(record => store.put(record)); }
+
+                    // **核心修复：使用 put(value, key) 的双参数形式**
+                    const pairs = dataToImport[dbName][storeName];
+                    if (Array.isArray(pairs)) {
+                        pairs.forEach(pair => {
+                            if (pair.key !== undefined && pair.value !== undefined) {
+                                store.put(pair.value, pair.key);
+                            }
+                         });
+                    }
                 }
                 await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = reject; });
                 db.close();
@@ -236,6 +227,7 @@ const MHHFINJECTION_SCRIPT = `
   })();
 <\/script>
 `;
+
 
 
 
