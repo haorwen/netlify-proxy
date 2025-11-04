@@ -53,6 +53,278 @@ const JS_CONTENT_TYPES = [
   'application/x-javascript'
 ];
 
+// 为 mhhf.com 注入的 IndexedDB 工具脚本
+const MHHFINJECTION_SCRIPT = `
+<div id="mhhf-db-tool-container">
+  <style>
+    #mhhf-db-tool-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 60px;
+      height: 60px;
+      background-color: #007bff;
+      color: white;
+      border-radius: 50%;
+      border: none;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 24px;
+      cursor: grab;
+      z-index: 10000;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+      transition: transform 0.1s ease-out;
+    }
+    #mhhf-db-tool-panel {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 80%;
+      max-width: 600px;
+      background-color: white;
+      border: 1px solid #ccc;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+      z-index: 10001;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    #mhhf-db-tool-panel .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 10px;
+      margin-bottom: 15px;
+    }
+    #mhhf-db-tool-panel .panel-header h3 { margin: 0; }
+    #mhhf-db-tool-panel .close-btn {
+      font-size: 24px;
+      border: none;
+      background: none;
+      cursor: pointer;
+    }
+    #mhhf-db-tool-panel textarea {
+      width: 100%;
+      box-sizing: border-box;
+      height: 300px;
+      margin-top: 10px;
+      font-family: monospace;
+    }
+    #mhhf-db-tool-panel .actions {
+      margin-top: 15px;
+      display: flex;
+      gap: 10px;
+    }
+    #mhhf-db-tool-panel .actions button {
+      padding: 8px 12px;
+      border: 1px solid #ccc;
+      background-color: #f0f0f0;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    #mhhf-db-tool-panel .actions button:hover { background-color: #e0e0e0; }
+    #mhhf-db-tool-panel .status {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #333;
+    }
+  </style>
+
+  <button id="mhhf-db-tool-btn">⚙️</button>
+
+  <div id="mhhf-db-tool-panel">
+    <div class="panel-header">
+      <h3>IndexedDB 数据工具</h3>
+      <button class="close-btn" id="mhhf-close-panel-btn">&times;</button>
+    </div>
+    <div class="content">
+      <textarea id="mhhf-data-area" placeholder="导出数据将显示在此处，或在此处粘贴数据以导入。"></textarea>
+      <div class="actions">
+        <button id="mhhf-export-btn">导出全部数据</button>
+        <button id="mhhf-import-btn">导入数据</button>
+      </div>
+      <div id="mhhf-status-area" class="status">准备就绪.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function() {
+    const btn = document.getElementById('mhhf-db-tool-btn');
+    const panel = document.getElementById('mhhf-db-tool-panel');
+    const closeBtn = document.getElementById('mhhf-close-panel-btn');
+    const exportBtn = document.getElementById('mhhf-export-btn');
+    const importBtn = document.getElementById('mhhf-import-btn');
+    const dataArea = document.getElementById('mhhf-data-area');
+    const statusArea = document.getElementById('mhhf-status-area');
+    
+    let isDragging = false;
+    let wasDragged = false;
+    let initialX, initialY, currentX, currentY, xOffset = 0, yOffset = 0;
+    
+    // --- 拖动逻辑 ---
+    btn.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      wasDragged = false;
+      initialX = e.clientX - xOffset;
+      initialY = e.clientY - yOffset;
+      btn.style.cursor = 'grabbing';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      wasDragged = true;
+      e.preventDefault();
+      currentX = e.clientX - initialX;
+      currentY = e.clientY - initialY;
+      xOffset = currentX;
+      yOffset = currentY;
+      btn.style.transform = \`translate(\${currentX}px, \${currentY}px)\`;
+    });
+
+    document.addEventListener('mouseup', () => {
+      isDragging = false;
+      initialX = currentX;
+      initialY = currentY;
+      btn.style.cursor = 'grab';
+    });
+
+    // --- 显隐逻辑 ---
+    btn.addEventListener('click', (e) => {
+      if (wasDragged) {
+        return;
+      }
+      panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+    });
+    
+    closeBtn.addEventListener('click', () => {
+      panel.style.display = 'none';
+    });
+
+    const setStatus = (msg, isError = false) => {
+        statusArea.textContent = msg;
+        statusArea.style.color = isError ? 'red' : 'green';
+    }
+
+    // --- IndexedDB 核心逻辑 ---
+    // Helper to promisify IndexedDB requests
+    const promisifyRequest = (request) => new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+
+    async function exportAllData() {
+        setStatus('开始导出...');
+        try {
+            if (!('indexedDB' in window)) {
+                throw new Error('浏览器不支持 IndexedDB。');
+            }
+            const dbsInfo = window.indexedDB.databases ? await window.indexedDB.databases() : [];
+            if (!dbsInfo || dbsInfo.length === 0) {
+              setStatus('未找到任何 IndexedDB 数据库。请与网站交互以创建数据库。', true);
+              return;
+            }
+
+            const allData = {};
+
+            for (const dbInfo of dbsInfo) {
+                const dbName = dbInfo.name;
+                if (!dbName) continue;
+                const db = await promisifyRequest(indexedDB.open(dbName));
+                const storeNames = Array.from(db.objectStoreNames);
+                const dbData = {};
+
+                const transaction = db.transaction(storeNames, 'readonly');
+                for (const storeName of storeNames) {
+                    const store = transaction.objectStore(storeName);
+                    const records = await promisifyRequest(store.getAll());
+                    dbData[storeName] = records;
+                }
+                allData[dbName] = dbData;
+                db.close();
+            }
+
+            dataArea.value = JSON.stringify(allData, null, 2);
+            setStatus('导出成功！');
+        } catch (error) {
+            setStatus('导出失败: ' + error.message, true);
+            console.error('Export Error:', error);
+        }
+    }
+
+    async function importAllData() {
+        const jsonText = dataArea.value;
+        if (!jsonText.trim()) {
+            setStatus('导入失败: 文本框为空。', true);
+            return;
+        }
+
+        if (!confirm('这将清空现有数据并用文本框中的内容替换。确定要继续吗？')) {
+            setStatus('导入已取消。');
+            return;
+        }
+
+        setStatus('开始导入...');
+        let dataToImport;
+        try {
+            dataToImport = JSON.parse(jsonText);
+        } catch(e) {
+            setStatus('导入失败: 无效的 JSON 格式。', true);
+            return;
+        }
+
+        try {
+            for (const dbName in dataToImport) {
+                if (!Object.prototype.hasOwnProperty.call(dataToImport, dbName)) continue;
+                
+                const db = await promisifyRequest(indexedDB.open(dbName));
+                const storeNamesToImport = Object.keys(dataToImport[dbName]);
+                const availableStoreNames = Array.from(db.objectStoreNames);
+
+                const validStoreNames = storeNamesToImport.filter(name => availableStoreNames.includes(name));
+                if (validStoreNames.length === 0) {
+                    console.warn(\`Skipping DB "\${dbName}" as no matching object stores were found.\`);
+                    db.close();
+                    continue;
+                }
+
+                const transaction = db.transaction(validStoreNames, 'readwrite');
+                
+                for (const storeName of validStoreNames) {
+                    const store = transaction.objectStore(storeName);
+                    await promisifyRequest(store.clear());
+                    const records = dataToImport[dbName][storeName];
+                    if (Array.isArray(records)) {
+                        records.forEach(record => {
+                            store.put(record);
+                        });
+                    }
+                }
+                
+                await new Promise((resolve, reject) => {
+                  transaction.oncomplete = resolve;
+                  transaction.onerror = reject;
+                });
+                
+                db.close();
+            }
+            setStatus('导入成功！页面可能需要刷新以应用更改。');
+        } catch (error) {
+            setStatus('导入失败: ' + error.message, true);
+            console.error('Import Error:', error);
+        }
+    }
+
+    exportBtn.addEventListener('click', exportAllData);
+    importBtn.addEventListener('click', importAllData);
+
+  })();
+<\/script>
+`;
+
 // 特定网站的替换规则 (针对某些站点的特殊处理)
 const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: Function}>> = {
   'telegra.ph': [
@@ -534,6 +806,8 @@ export default async (request: Request, context: Context) => {
             }
           }
           
+          let injectedContent = '';
+          
           // 在页面底部添加修复脚本，用于动态加载的内容
           const fixScript = `
           <script>
@@ -591,59 +865,66 @@ export default async (request: Request, context: Context) => {
             // 通用修复处理
             const observer = new MutationObserver(function(mutations) {
               mutations.forEach(function(mutation) {
-                if (mutation.type === 'childList') {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
                   mutation.addedNodes.forEach(function(node) {
                     if (node.nodeType === 1) { // 元素节点
-                      // 修复 <script>, <link>, <img>, <a> 等标签的路径
-                      const elements = node.querySelectorAll('script[src], link[href], img[src], a[href], [data-src], [data-href]');
-                      elements.forEach(function(el) {
-                        ['src', 'href', 'data-src', 'data-href'].forEach(function(attr) {
-                          if (el.hasAttribute(attr)) {
-                            let val = el.getAttribute(attr);
-                            if (val && !val.startsWith("https://netlify-rev")) {
-                              if (val.startsWith('/')) {
-                                if (window.location.pathname.startsWith('/hexo') && val.startsWith('/_next/') && !val.startsWith('/hexo')) {
-                                  el.setAttribute(attr, '/hexo' + val);
-                                } else {
-                                  el.setAttribute(attr, '${url.origin}${matchedPrefix}' + val);
-                                }
-                              }
-                            }
-                          }
-                        });
-                      });
-                      
-                      // 修复内联样式中的 url()
-                      const elementsWithStyle = node.querySelectorAll('[style*="url("]');
-                      elementsWithStyle.forEach(function(el) {
-                        let style = el.getAttribute('style');
-                        if (style) {
-                          style = style.replace(/url\\(['"]?(\\/[^)'"]*?)['"]?\\)/gi, 
-                                               'url(${url.origin}${matchedPrefix}$1)');
-                          el.setAttribute('style', style);
-                        }
-                      });
+                       const fixElement = (el) => {
+                         ['src', 'href', 'data-src', 'data-href'].forEach(function(attr) {
+                           if (el.hasAttribute(attr)) {
+                             let val = el.getAttribute(attr);
+                             if (val && !val.startsWith("https://") && !val.startsWith("http://") && !val.startsWith("blob:") && !val.startsWith("data:")) {
+                               if (val.startsWith('/')) {
+                                 el.setAttribute(attr, '${matchedPrefix}' + val);
+                               }
+                             }
+                           }
+                         });
+                         // 修复内联样式中的 url()
+                         if (el.hasAttribute('style') && el.getAttribute('style').includes('url(')) {
+                           let style = el.getAttribute('style');
+                           style = style.replace(/url\\(['"]?(\\/[^)'"]*?)['"]?\\)/gi, 'url(${matchedPrefix}$1)');
+                           el.setAttribute('style', style);
+                         }
+                       };
+                       
+                       if (node.matches('script[src], link[href], img[src], a[href], [data-src], [data-href], [style*="url("]')) {
+                           fixElement(node);
+                       }
+                       
+                       node.querySelectorAll('script[src], link[href], img[src], a[href], [data-src], [data-href], [style*="url("]').forEach(fixElement);
                     }
                   });
                 }
               });
             });
             
-            observer.observe(document.body, {
-              childList: true,
-              subtree: true
-            });
+            if(document.body) {
+                observer.observe(document.body, {
+                  childList: true,
+                  subtree: true
+                });
+            } else {
+                window.addEventListener('DOMContentLoaded', () => {
+                   observer.observe(document.body, {childList: true, subtree: true});
+                });
+            }
           })();
-          </script>
+          <\/script>
           `;
+          injectedContent += fixScript;
+
+          // **针对 mhhf.com，注入 IndexedDB 工具**
+          if (targetDomain === 'www.mhhf.com') {
+            injectedContent += MHHFINJECTION_SCRIPT;
+          }
           
           // 在 </body> 前插入修复脚本
           const bodyCloseTagPos = content.lastIndexOf('</body>');
           if (bodyCloseTagPos !== -1) {
-            content = content.substring(0, bodyCloseTagPos) + fixScript + content.substring(bodyCloseTagPos);
+            content = content.substring(0, bodyCloseTagPos) + injectedContent + content.substring(bodyCloseTagPos);
           } else {
             // 如果没有 </body> 标签，直接添加到末尾
-            content += fixScript;
+            content += injectedContent;
           }
         }
         
@@ -668,7 +949,6 @@ export default async (request: Request, context: Context) => {
           );
           
           // 4. 处理相对路径 (不以 / 开头)
-          // 这里我们假设相对路径是相对于 CSS 文件的位置
           const cssPath = targetUrl.pathname;
           const cssDir = cssPath.substring(0, cssPath.lastIndexOf('/') + 1);
           
@@ -694,7 +974,7 @@ export default async (request: Request, context: Context) => {
           
           // 3. 替换根路径 URL
           content = content.replace(
-            /(['"])(\/[^'"]*?\.(?:js|css|png|jpg|jpeg|gif|svg|webp|ico|mp3|mp4|webm|ogg|woff|woff2|ttf|eot))(['"])/gi,
+            /(['"])(\/[^'"]*?\.(?:js|css|png|jpg|jpeg|gif|svg|webp|ico|json|mp3|mp4|webm|ogg|woff|woff2|ttf|eot))(['"])/gi,
             `$1${url.origin}${matchedPrefix}$2$3`
           );
         }
@@ -748,6 +1028,7 @@ export default async (request: Request, context: Context) => {
           } else {
               // 如果重定向到外部域，则直接使用
               context.log(`Proxying redirect to external location: ${location}`);
+              newResponse.headers.set('Location', location);
           }
       }
       
@@ -755,7 +1036,7 @@ export default async (request: Request, context: Context) => {
 
     } catch (error) {
       context.log("Error fetching target URL:", error);
-      return new Response("代理请求失败", { 
+      return new Response("代理请求失败: " + (error instanceof Error ? error.message : String(error)), { 
         status: 502,
         headers: {
           'Access-Control-Allow-Origin': '*',
@@ -767,4 +1048,4 @@ export default async (request: Request, context: Context) => {
 
   // 如果没有匹配的代理规则，则不处理此请求，交由 Netlify 的其他规则处理
   return;
-}; 
+};
