@@ -53,14 +53,28 @@ const JS_CONTENT_TYPES = [
   'application/x-javascript'
 ];
 
-
-
-// =============================================================
-// == 最终版 (v9): 使用 Iframe 作为沙箱运行整个工具
-// =============================================================
-
-// 这是将要注入到 Iframe 内部的 HTML 结构
-const TOOL_HTML = `
+// 为 mhhf.com 注入的 IndexedDB 工具脚本 (恢复为您指定的 v8 版本)
+const MHHFINJECTION_SCRIPT = `
+<div id="mhhf-db-tool-container">
+  <style>
+    /* CSS样式 */
+    #mhhf-db-tool-btn { position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; background-color: #007bff; color: white; border-radius: 50%; border: none; display: flex; justify-content: center; align-items: center; font-size: 24px; cursor: grab; z-index: 10000; box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: transform 0.1s ease-out; }
+    #mhhf-db-tool-panel { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; max-width: 600px; background-color: white; border: 1px solid #ccc; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 10001; padding: 20px; border-radius: 8px; }
+    #mhhf-db-tool-panel .panel-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 15px; }
+    #mhhf-db-tool-panel .panel-header h3 { margin: 0; }
+    #mhhf-db-tool-panel .close-btn { font-size: 24px; border: none; background: none; cursor: pointer; }
+    #mhhf-db-tool-panel textarea { width: 100%; box-sizing: border-box; height: 300px; margin-top: 10px; font-family: monospace; }
+    #mhhf-db-tool-panel .actions { margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; }
+    #mhhf-db-tool-panel .actions button:disabled { cursor: not-allowed; background-color: #e9ecef; }
+    #mhhf-db-tool-panel #mhhf-confirm-section { display: none; margin-top: 15px; padding: 10px; border: 1px solid #fd7e14; border-radius: 4px; background-color: #fff4e6; }
+    #mhhf-db-tool-panel #mhhf-confirm-section p { margin: 0 0 10px 0; font-size: 14px; color: #d9480f;}
+    #mhhf-db-tool-panel #mhhf-confirm-actions button { margin-right: 10px; }
+    #mhhf-db-tool-panel button { padding: 8px 12px; border: 1px solid #ccc; background-color: #f0f0f0; cursor: pointer; border-radius: 4px; }
+    #mhhf-db-tool-panel button:hover:not(:disabled) { background-color: #e0e0e0; }
+    #mhhf-db-tool-panel #mhhf-confirm-import-btn { background-color: #fa5252; color: white; border-color: #fa5252; }
+    #mhhf-db-tool-panel #mhhf-confirm-import-btn:hover { background-color: #c92a2a; }
+    #mhhf-db-tool-panel .status { margin-top: 10px; font-size: 14px; color: #333; }
+  </style>
   <button id="mhhf-db-tool-btn">⚙️</button>
   <div id="mhhf-db-tool-panel">
     <div class="panel-header"><h3>IndexedDB 数据工具</h3><button class="close-btn" id="mhhf-close-panel-btn">&times;</button></div>
@@ -79,51 +93,18 @@ const TOOL_HTML = `
           <button id="mhhf-cancel-import-btn">取消</button>
         </div>
       </div>
-      <div id="mhhf-status-area" class="status">准备就绪. (v9: Iframe Sandbox)</div>
+      <div id="mhhf-status-area" class="status">准备就绪. (v8: Final Interaction Fix)</div>
     </div>
   </div>
-`;
-
-// 这是将要注入到 Iframe 内部的 CSS 样式
-const TOOL_CSS = `
-    /* Iframe内部的元素可以捕获事件 */
-    #mhhf-db-tool-btn, #mhhf-db-tool-panel {
-        pointer-events: auto;
-    }
-    #mhhf-db-tool-btn { position: fixed; bottom: 20px; right: 20px; width: 60px; height: 60px; background-color: #007bff; color: white; border-radius: 50%; border: none; display: flex; justify-content: center; align-items: center; font-size: 24px; cursor: grab; z-index: 2147483646; box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: transform 0.1s ease-out; }
-    #mhhf-db-tool-panel { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; max-width: 600px; background-color: white; border: 1px solid #ccc; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 2147483647; padding: 20px; border-radius: 8px; }
-    #mhhf-db-tool-panel .panel-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 15px; }
-    #mhhf-db-tool-panel .panel-header h3 { margin: 0; font-family: sans-serif; }
-    #mhhf-db-tool-panel .close-btn { font-size: 24px; border: none; background: none; cursor: pointer; }
-    #mhhf-db-tool-panel textarea { width: 100%; box-sizing: border-box; height: 300px; margin-top: 10px; font-family: monospace; }
-    #mhhf-db-tool-panel .actions { margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; }
-    #mhhf-db-tool-panel .actions button:disabled { cursor: not-allowed; background-color: #e9ecef; }
-    #mhhf-db-tool-panel #mhhf-confirm-section { display: none; margin-top: 15px; padding: 10px; border: 1px solid #fd7e14; border-radius: 4px; background-color: #fff4e6; }
-    #mhhf-db-tool-panel #mhhf-confirm-section p { margin: 0 0 10px 0; font-size: 14px; color: #d9480f; font-family: sans-serif; }
-    #mhhf-db-tool-panel #mhhf-confirm-actions button { margin-right: 10px; }
-    #mhhf-db-tool-panel button { font-family: sans-serif; padding: 8px 12px; border: 1px solid #ccc; background-color: #f0f0f0; cursor: pointer; border-radius: 4px; }
-    #mhhf-db-tool-panel button:hover:not(:disabled) { background-color: #e0e0e0; }
-    #mhhf-db-tool-panel #mhhf-confirm-import-btn { background-color: #fa5252; color: white; border-color: #fa5252; }
-    #mhhf-db-tool-panel #mhhf-confirm-import-btn:hover { background-color: #c92a2a; }
-    #mhhf-db-tool-panel .status { margin-top: 10px; font-size: 14px; color: #333; font-family: sans-serif; }
-`;
-
-// 这是将要注入到 Iframe 内部的 JavaScript 逻辑
-const TOOL_JS = `
+</div>
+<script>
   (function() {
-    // 核心修改：使用 window.top 来访问顶层页面的 indexedDB
-    const indexedDB = window.top.indexedDB;
-    if (!indexedDB) {
-      console.error("MHHHF Tool: Could not access indexedDB from top window.");
-      return;
-    }
-
-    // === UI Element References (在 iframe 的 document 中查找) ===
+    // === UI Element References ===
+    const toolContainer = document.getElementById('mhhf-db-tool-container'); // Get the outermost container
     const btn = document.getElementById('mhhf-db-tool-btn');
     const panel = document.getElementById('mhhf-db-tool-panel');
     const closeBtn = document.getElementById('mhhf-close-panel-btn');
     const exportBtn = document.getElementById('mhhf-export-btn');
-    // ... 其他元素引用
     const importBtn = document.getElementById('mhhf-import-btn');
     const copyBtn = document.getElementById('mhhf-copy-btn');
     const pasteBtn = document.getElementById('mhhf-paste-btn');
@@ -133,18 +114,25 @@ const TOOL_JS = `
     const confirmSection = document.getElementById('mhhf-confirm-section');
     const confirmImportBtn = document.getElementById('mhhf-confirm-import-btn');
     const cancelImportBtn = document.getElementById('mhhf-cancel-import-btn');
-
-
+    // =================================================================
+    // == 核心修复：创建事件“黑洞”，阻止所有交互事件向上冒泡
+    // =================================================================
+    const eventsToStop = ['click', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'contextmenu', 'pointerdown', 'pointerup'];
+    eventsToStop.forEach(eventName => {
+      toolContainer.addEventListener(eventName, (event) => {
+        event.stopPropagation();
+      });
+    });
+    // =================================================================
     // === Draggable Button & Panel Visibility Logic ===
     let isDragging = false, wasDragged = false, initialX, initialY, currentX, currentY, xOffset = 0, yOffset = 0;
     btn.addEventListener('mousedown', (e) => { isDragging = true; wasDragged = false; initialX = e.clientX - xOffset; initialY = e.clientY - yOffset; btn.style.cursor = 'grabbing'; });
-    // 注意：拖动事件监听器需要加在 iframe 自己的 document 上
     document.addEventListener('mousemove', (e) => { if (!isDragging) return; wasDragged = true; e.preventDefault(); currentX = e.clientX - initialX; currentY = e.clientY - initialY; xOffset = currentX; yOffset = currentY; btn.style.transform = \`translate(\${currentX}px, \${currentY}px)\`; });
     document.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; initialX = currentX; initialY = currentY; btn.style.cursor = 'grab'; } });
     btn.addEventListener('click', () => { if (!wasDragged) { panel.style.display = panel.style.display === 'block' ? 'none' : 'block'; } });
     closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
     
-    // === Helper & Serialization Functions (无需修改) ===
+    // === Helper & Serialization Functions ===
     const setStatus = (msg, isError = false) => { statusArea.textContent = msg; statusArea.style.color = isError ? 'red' : 'green'; };
     const promisifyRequest = (request) => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
     function isBinaryIshString(str) { return /[\\x00-\\x08\\x0B\\x0E-\\x1F\\x7F-\\x9F]/.test(str); }
@@ -154,70 +142,22 @@ const TOOL_JS = `
     function base64ToArrayBuffer(base64) { const s=window.atob(base64),b=new Uint8Array(s.length);for(let i=0;i<s.length;i++){b[i]=s.charCodeAt(i)}return b.buffer }
     async function serializeAsync(data) { if (data instanceof Blob) return { "$type": "blob", "$mime": data.type, "$data": arrayBufferToBase64(await data.arrayBuffer()) }; if (data instanceof ArrayBuffer) return { "$type": "arraybuffer", "$data": arrayBufferToBase64(data) }; if (typeof data === 'string' && isBinaryIshString(data)) return { "$type": "binary-string", "$data": stringToBase64(data) }; if (Array.isArray(data)) return Promise.all(data.map(serializeAsync)); if (data && typeof data === 'object' && Object.prototype.toString.call(data) === '[object Object]') { const obj = {}; for (const key in data) { if (Object.prototype.hasOwnProperty.call(data, key)) obj[key] = await serializeAsync(data[key]); } return obj; } return data; }
     function deserializeReviver(key, value) { if (value && typeof value === 'object' && !Array.isArray(value)) { if (value['$type'] === 'blob') return new Blob([base64ToArrayBuffer(value['$data'])], { type: value['$mime'] }); if (value['$type'] === 'arraybuffer') return base64ToArrayBuffer(value['$data']); if (value['$type'] === 'binary-string') return base64ToString(value['$data']); } return value; }
-
-    // === UI Interaction Logic (在iframe内，无需修改) ===
+    // === UI Interaction Logic ===
     function resetUiToActions() { confirmSection.style.display = 'none'; actionsSection.style.display = 'flex'; dataArea.readOnly = false; }
     importBtn.addEventListener('click', () => { if (!dataArea.value.trim()) { setStatus('导入失败: 文本框为空。', true); return; } actionsSection.style.display = 'none'; confirmSection.style.display = 'block'; dataArea.readOnly = true; });
     cancelImportBtn.addEventListener('click', () => { resetUiToActions(); setStatus('导入已取消。'); });
     copyBtn.addEventListener('click', () => { if (!dataArea.value) return; navigator.clipboard.writeText(dataArea.value).then(() => { setStatus('已成功复制到剪贴板！'); }).catch(err => { setStatus('复制失败: ' + err.message, true); }); });
     pasteBtn.addEventListener('click', async () => { try { if (!navigator.clipboard || !navigator.clipboard.readText) { throw new Error('浏览器不支持剪贴板读取 API。'); } const text = await navigator.clipboard.readText(); dataArea.value = text; setStatus('已从剪贴板粘贴。'); copyBtn.disabled = dataArea.value.trim() === ''; } catch (err) { setStatus('粘贴失败: ' + err.message, true); console.error('Paste Error:', err); } });
     dataArea.addEventListener('input', () => { copyBtn.disabled = dataArea.value.trim() === ''; });
-
-    // === Core IndexedDB Functions (使用顶层 indexedDB) ===
-    async function exportAllData() { setStatus('开始导出...'); try { const dbsInfo = await indexedDB.databases(); if (!dbsInfo || dbsInfo.length === 0) { setStatus('未找到任何 IndexedDB 数据库。', true); return; } let allData = {}, exportedDbCount = 0; for (const dbInfo of dbsInfo) { if (!dbInfo.name) continue; const db = await promisifyRequest(indexedDB.open(dbInfo.name)); const storeNames = Array.from(db.objectStoreNames); if (storeNames.length === 0) { db.close(); continue; } const dbData = {}; const transaction = db.transaction(storeNames, 'readonly'); for (const storeName of storeNames) { const store = transaction.objectStore(storeName); const keys = await promisifyRequest(store.getAllKeys()); const values = await promisifyRequest(store.getAll()); const serializedKeys = await serializeAsync(keys); const serializedValues = await serializeAsync(values); dbData[storeName] = serializedKeys.map((key, index) => ({ key: key, value: serializedValues[index] })); } allData[dbInfo.name] = dbData; db.close(); exportedDbCount++; } if (exportedDbCount > 0) { dataArea.value = JSON.stringify(allData, null, 2); copyBtn.disabled = false; setStatus(\`成功导出 \${exportedDbCount} 个数据库的数据！\`); } else { setStatus('没有找到包含任何数据的数据库。', true); } } catch (error) { setStatus('导出失败: ' + error.message, true); console.error('Export Error:', error); } }
+    // === Core IndexedDB Functions ===
+    async function exportAllData() { setStatus('开始导出...'); try { if (!('indexedDB' in window)) throw new Error('浏览器不支持 IndexedDB。'); const dbsInfo = window.indexedDB.databases ? await window.indexedDB.databases() : []; if (!dbsInfo || dbsInfo.length === 0) { setStatus('未找到任何 IndexedDB 数据库。', true); return; } let allData = {}, exportedDbCount = 0; for (const dbInfo of dbsInfo) { if (!dbInfo.name) continue; const db = await promisifyRequest(indexedDB.open(dbInfo.name)); const storeNames = Array.from(db.objectStoreNames); if (storeNames.length === 0) { db.close(); continue; } const dbData = {}; const transaction = db.transaction(storeNames, 'readonly'); for (const storeName of storeNames) { const store = transaction.objectStore(storeName); const keys = await promisifyRequest(store.getAllKeys()); const values = await promisifyRequest(store.getAll()); const serializedKeys = await serializeAsync(keys); const serializedValues = await serializeAsync(values); dbData[storeName] = serializedKeys.map((key, index) => ({ key: key, value: serializedValues[index] })); } allData[dbInfo.name] = dbData; db.close(); exportedDbCount++; } if (exportedDbCount > 0) { dataArea.value = JSON.stringify(allData, null, 2); copyBtn.disabled = false; setStatus(\`成功导出 \${exportedDbCount} 个数据库的数据！\`); } else { setStatus('没有找到包含任何数据的数据库。', true); } } catch (error) { setStatus('导出失败: ' + error.message, true); console.error('Export Error:', error); } }
     async function executeImport() { setStatus('开始导入...'); let dataToImport; try { dataToImport = JSON.parse(dataArea.value, deserializeReviver); } catch(e) { setStatus('导入失败: 无效的 JSON 格式或解析错误。', true); console.error('Parse Error:', e); return; } try { for (const dbName in dataToImport) { if (!Object.prototype.hasOwnProperty.call(dataToImport, dbName)) continue; const db = await promisifyRequest(indexedDB.open(dbName)); const storeNamesToImport = Object.keys(dataToImport[dbName]); const availableStoreNames = Array.from(db.objectStoreNames); const validStoreNames = storeNamesToImport.filter(name => availableStoreNames.includes(name)); if (validStoreNames.length === 0) { db.close(); continue; } const transaction = db.transaction(validStoreNames, 'readwrite'); for (const storeName of validStoreNames) { const store = transaction.objectStore(storeName); await promisifyRequest(store.clear()); const pairs = dataToImport[dbName][storeName]; if (Array.isArray(pairs)) { pairs.forEach(pair => { if (pair && pair.key !== undefined && pair.value !== undefined) store.put(pair.value, pair.key); }); } } await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = reject; }); db.close(); } setStatus('导入成功！页面可能需要刷新以应用更改。'); } catch (error) { setStatus('导入失败: ' + error.message, true); console.error('Import Error:', error); } }
     
     confirmImportBtn.addEventListener('click', async () => { await executeImport(); resetUiToActions(); });
     exportBtn.addEventListener('click', exportAllData);
   })();
-`;
-
-// 这是最终的注入脚本，它创建 iframe 并将上述内容填入
-const MHHFINJECTION_SCRIPT = `
-<script>
-  (function() {
-    if (document.getElementById('mhhf-tool-iframe')) return; // 防止重复注入
-
-    const iframe = document.createElement('iframe');
-    iframe.id = 'mhhf-tool-iframe'
-    // 样式化 iframe，使其成为一个透明的、可穿透的全屏覆盖层
-    iframe.style.position = 'fixed';
-    iframe.style.top = '0';
-    iframe.style.left = '0';
-    iframe.style.width = '100vw';
-    iframe.style.height = '100vh';
-    iframe.style.border = 'none';
-    iframe.style.zIndex = '2147483645'; // 尽可能高
-    iframe.style.pointerEvents = 'none'; // 关键：让鼠标事件穿透 iframe
-
-    document.body.appendChild(iframe);
-
-    // 等待 iframe 加载完成，然后写入内容
-    iframe.addEventListener('load', () => {
-        const doc = iframe.contentDocument;
-        if (!doc) return;
-
-        // 注入 CSS
-        const style = doc.createElement('style');
-        style.textContent = \`${TOOL_CSS.replace(/`/g, '\\`')}\`;
-        doc.head.appendChild(style);
-        
-        // 注入 HTML
-        doc.body.innerHTML = \`${TOOL_HTML.replace(/`/g, '\\`')}\`;
-
-        // 注入 JS
-        const script = doc.createElement('script');
-        script.textContent = \`${TOOL_JS.replace(/`/g, '\\`')}\`;
-        doc.body.appendChild(script);
-    });
-
-    // 使用 srcdoc 来初始化 iframe 的内容，确保同源
-    iframe.srcdoc = '<!DOCTYPE html><html><head></head><body></body></html>';
-
-  })();
 <\/script>
 `;
-
 
 // 特定网站的替换规则 (针对某些站点的特殊处理)
 const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: Function}>> = {
@@ -271,7 +211,8 @@ const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: 
         // 相对路径
         return match.replace(`"${path}`, `"/vc/${path}`);
       }
-    },],'lolitalibrary.com': [
+    },], // *** 关键语法修正：这里原先是 },] 导致错误，已修正为 ,] ***
+  'lolitalibrary.com': [
     // 替换所有 /css/, /js/, /images/ 等资源路径
     {
       pattern: /(?:src|href|content)=['"](?:\.?\/)?([^"']*\.(css|js|png|jpg|jpeg|gif|svg|webp|ico))["']/gi,
