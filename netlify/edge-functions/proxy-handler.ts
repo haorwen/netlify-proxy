@@ -178,7 +178,6 @@ const MHHFINJECTION_SCRIPT = `
     async function importAllData() {
         const jsonText = dataArea.value;
         if (!jsonText.trim()) { setStatus('导入失败: 文本框为空。', true); return; }
-        if (!confirm('【警告】这将清空现有数据并用文本框中的内容替换。确定要继续吗？')) { setStatus('导入已取消。'); return; }
         setStatus('开始导入...');
         let dataToImport;
         try {
