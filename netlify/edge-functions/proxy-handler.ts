@@ -603,19 +603,31 @@ export default async (request: Request, context: Context) => {
       // 确保 accept-encoding 不会导致压缩响应
       proxyRequest.headers.delete('accept-encoding');
       
-      // 保留原始 referer，但用目标域名
-      const referer = request.headers.get('referer');
-      if (referer) {
-        try {
-          const refUrl = new URL(referer);
-          const newReferer = `${targetUrl.protocol}//${targetUrl.host}${refUrl.pathname}${refUrl.search}`;
-          proxyRequest.headers.set('referer', newReferer);
-        } catch(e) {
-          // 如果解析 referer 出错，保持原样
-        }
+      // 检查请求来源是否来自 /telegraph/ 路径
+      const referer = request.headers.get('referer') || '';
+      const isFromTelegraph = referer.includes('/telegraph/');
+      
+      // 设置 Host 头
+      proxyRequest.headers.set("Host", targetUrl.host);
+      
+      // 特殊处理：如果来源是 /telegraph/ 则强制修改 referer
+      if (isFromTelegraph) {
+        proxyRequest.headers.set('referer', 'https://telegra.ph/');
+        context.log(`Modified referer for telegraph proxy: ${targetUrl.toString()}`);
       } else {
-        // 如果没有 referer，添加一个目标域名的 referer
-        proxyRequest.headers.set('referer', `${targetUrl.protocol}//${targetUrl.host}/`);
+        // 原有的 referer 处理逻辑
+        const originalReferer = request.headers.get('referer');
+        if (originalReferer) {
+          try {
+            const refUrl = new URL(originalReferer);
+            const newReferer = `${targetUrl.protocol}//${targetUrl.host}${refUrl.pathname}${refUrl.search}`;
+            proxyRequest.headers.set('referer', newReferer);
+          } catch(e) {
+            proxyRequest.headers.set('referer', `${targetUrl.protocol}//${targetUrl.host}/`);
+          }
+        } else {
+          proxyRequest.headers.set('referer', `${targetUrl.protocol}//${targetUrl.host}/`);
+        }
       }
       
       // 发起代理请求
