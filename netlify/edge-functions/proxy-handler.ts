@@ -636,21 +636,35 @@ async function proxyAndRewrite(
       value: string,
     ) => {
       try {
-        let resolved: URL | null = null;
+        const trimmed = value.trim();
 
-        if (value.startsWith('http://') || value.startsWith('https://')) {
-          resolved = new URL(value);
-        } else if (value.startsWith('//')) {
-          resolved = new URL(`${targetUrl.protocol}${value}`);
-        } else if (
-          value.startsWith('/') ||
-          value.startsWith('./') ||
-          value.startsWith('../')
-        ) {
-          resolved = new URL(value, targetUrl);
+        if (!trimmed) {
+          return match;
         }
 
-        if (!resolved) {
+        const isSkippableScheme = /^(?:data|blob|javascript|mailto|tel):/i.test(trimmed);
+        if (isSkippableScheme) {
+          return match;
+        }
+
+        const looksLikePath = /[\\/]/.test(trimmed) || /\.[a-z0-9]{2,}(?:[?#].*)?$/i.test(trimmed);
+        let resolved: URL | null = null;
+
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+          resolved = new URL(trimmed);
+        } else if (trimmed.startsWith('//')) {
+          resolved = new URL(`${targetUrl.protocol}${trimmed}`);
+        } else if (
+          trimmed.startsWith('/') ||
+          trimmed.startsWith('./') ||
+          trimmed.startsWith('../')
+        ) {
+          resolved = new URL(trimmed, targetUrl);
+        } else if (looksLikePath) {
+          resolved = new URL(trimmed, targetUrl);
+        }
+
+        if (!resolved || (resolved.protocol !== 'http:' && resolved.protocol !== 'https:')) {
           return match;
         }
 
@@ -835,6 +849,16 @@ async function proxyAndRewrite(
 
       content = content.replace(
         /(["'`])(https?:\/\/[^"'`]+|\/\/[^"'`]+|\.{1,2}\/[^"'`]+|\/(?!\s)[^"'`]+)(["'`])/gi,
+        (match, quote, jsPath) => rewriteJsLiteral(match, quote, jsPath)
+      );
+
+      content = content.replace(
+        /(["'`])((?:[A-Za-z0-9_.-]+\/)+[^"'`]*)(["'`])/g,
+        (match, quote, jsPath) => rewriteJsLiteral(match, quote, jsPath)
+      );
+
+      content = content.replace(
+        /(["'`])([A-Za-z0-9_.-]+\.(?:js|mjs|css|json|png|jpg|jpeg|gif|svg|webp|ico|mp3|mp4|webm|ogg|woff|woff2|ttf|eot|wasm)(?:[^"'`]*)?)(["'`])/gi,
         (match, quote, jsPath) => rewriteJsLiteral(match, quote, jsPath)
       );
     }
