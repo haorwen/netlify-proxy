@@ -53,6 +53,40 @@ const JS_CONTENT_TYPES = [
   'application/x-javascript'
 ];
 
+const MHHF_SW_PATH = '/mhhf-sw.js';
+const MHHF_SW_SCOPE = '/mhhf';
+const MHHF_SW_SOURCE = `
+const CACHE_NAME = 'mhhf-proxy-cache-v1';
+
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE_NAME));
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
+  event.respondWith(
+    caches.open(CACHE_NAME).then((cache) => {
+      return fetch(event.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            cache.put(event.request, response.clone());
+          }
+          return response;
+        })
+        .catch(() => cache.match(event.request));
+    })
+  );
+});
+`;
+
 // 独立的 IndexedDB 工具页面 (v10: Standalone Page)
 const INDEXEDDB_TOOL_HTML = `
 <!DOCTYPE html>
@@ -534,6 +568,17 @@ export default async (request: Request, context: Context) => {
   const url = new URL(request.url);
   const path = url.pathname;
 
+  if (path === MHHF_SW_PATH) {
+    context.log('Serving MHHF service worker.');
+    return new Response(MHHF_SW_SOURCE, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      }
+    });
+  }
+
   // *** 新增：/localstorage 路径，返回 LocalStorage 工具页面 ***
   if (path === '/localstorage' || path.startsWith('/localstorage/')) {
     context.log("Serving LocalStorage tool page.");
@@ -882,6 +927,15 @@ export default async (request: Request, context: Context) => {
           }
           
           // 在页面底部添加修复脚本，用于动态加载的内容
+          const injectIntoBody = (snippet: string) => {
+            const bodyCloseTagPos = content.lastIndexOf('</body>');
+            if (bodyCloseTagPos !== -1) {
+              content = content.substring(0, bodyCloseTagPos) + snippet + content.substring(bodyCloseTagPos);
+            } else {
+              content += snippet;
+            }
+          };
+
           const fixScript = `
           <script>
           // 修复动态加载的资源路径
@@ -984,14 +1038,35 @@ export default async (request: Request, context: Context) => {
           })();
           <\/script>
           `;
-          
-          // 在 </body> 前插入修复脚本
-          const bodyCloseTagPos = content.lastIndexOf('</body>');
-          if (bodyCloseTagPos !== -1) {
-            content = content.substring(0, bodyCloseTagPos) + fixScript + content.substring(bodyCloseTagPos);
-          } else {
-            // 如果没有 </body> 标签，直接添加到末尾
-            content += fixScript;
+          injectIntoBody(fixScript);
+
+          if (matchedPrefix === MHHF_SW_SCOPE) {
+            const swRegistrationScript = `
+            <script>
+            (function() {
+              if (!('serviceWorker' in navigator)) {
+                return;
+              }
+
+              const register = () => {
+                navigator.serviceWorker.register('${MHHF_SW_PATH}', { scope: '${MHHF_SW_SCOPE}/' })
+                  .then((registration) => {
+                    console.log('[MHHF] Service worker registered:', registration.scope);
+                  })
+                  .catch((error) => {
+                    console.error('[MHHF] Service worker registration failed:', error);
+                  });
+              };
+
+              if (document.readyState === 'complete') {
+                register();
+              } else {
+                window.addEventListener('load', register, { once: true });
+              }
+            })();
+            <\/script>
+            `;
+            injectIntoBody(swRegistrationScript);
           }
         }
         
