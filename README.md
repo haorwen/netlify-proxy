@@ -55,6 +55,8 @@ https://fd-gally.netlify.app/gemini    # Google Gemini API
 
 ### 通用代理（特殊网址可能不支持）
 
+#### 快速代理 `/proxy/`
+
 代理任意 URL，支持两种格式：
 
 ```
@@ -64,6 +66,16 @@ https://xxxx.netlify.app/proxy/https://example.com/path
 # URL 编码的形式
 https://xxxx.netlify.app/proxy/https%3A%2F%2Fexample.com%2Fpath
 ```
+
+#### 自动路径修复 `/proxyp/`
+
+当目标站点依赖根目录或相对路径资源时，可以使用带有自动重写的端口：
+
+```
+https://xxxx.netlify.app/proxyp/https://example.com
+```
+
+此模式会在代理的同时自动修复 HTML/CSS/JS 内的 `src`、`href`、`url()`、`srcset` 等路径，效果与内置的 `/telegraph`、`/tv` 等定制路径一致，适合快速接入任意站点。
 
 ---
 
