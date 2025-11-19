@@ -609,6 +609,27 @@ async function proxyAndRewrite(
     const targetDomain = targetUrl.host;
     const targetPathBase = targetUrl.pathname.substring(0, targetUrl.pathname.lastIndexOf('/') + 1);
 
+    const buildProxiedUrl = (resolved: URL) => {
+      if (resolved.origin !== targetUrl.origin) {
+        return null;
+      }
+      return `${url.origin}${matchedPrefix}${resolved.pathname}${resolved.search}${resolved.hash}`;
+    };
+
+    const rewriteRelativeAttribute = (
+      match: string,
+      attr: string,
+      value: string,
+    ) => {
+      try {
+        const resolved = new URL(value, targetUrl);
+        const proxied = buildProxiedUrl(resolved);
+        return proxied ? `${attr}="${proxied}"` : match;
+      } catch {
+        return match;
+      }
+    };
+
     if (HTML_CONTENT_TYPES.some(type => contentType.includes(type))) {
       content = content.replace(
         new RegExp(`(href|src|action|content)=["']https?://${targetDomain}(/[^"']*?)["']`, 'gi'),
@@ -622,6 +643,11 @@ async function proxyAndRewrite(
 
       content = content.replace(
         new RegExp(`(href|src|action|content)=["'](/[^"']*?)["']`, 'gi'),
+        `$1="${url.origin}${matchedPrefix}$2"`
+      );
+
+      content = content.replace(
+        new RegExp(`(href|src|action|content)=(/[^\s"'>]*)`, 'gi'),
         `$1="${url.origin}${matchedPrefix}$2"`
       );
 
@@ -647,7 +673,7 @@ async function proxyAndRewrite(
 
       content = content.replace(
         /(href|src|action|data-src|data-href)=["']((?!https?:\/\/|\/\/|\/)[^"']+)["']/gi,
-        `$1="${url.origin}${matchedPrefix}/${targetPathBase}$2"`
+        `$1="${url.origin}${matchedPrefix}${targetPathBase}$2"`
       );
 
       content = content.replace(
@@ -668,6 +694,16 @@ async function proxyAndRewrite(
       content = content.replace(
         /([^a-zA-Z0-9_])(['"])(\/[^\/'"]+\/[^'"]*?)(['"])/g,
         `$1$2${url.origin}${matchedPrefix}$3$4`
+      );
+
+      content = content.replace(
+        new RegExp(`(href|src|action|content)=["'](?!(?:https?:|//|/|#|data:|mailto:|tel:))([^"']+)['"]`, 'gi'),
+        (match, attr, relPath) => rewriteRelativeAttribute(match, attr, relPath)
+      );
+
+      content = content.replace(
+        new RegExp(`(href|src|action|content)=(?!(?:https?:|//|/|#|data:|mailto:|tel:))([^\s"'>]+)`, 'gi'),
+        (match, attr, relPath) => rewriteRelativeAttribute(match, attr, relPath)
       );
 
       content = content.replace(
@@ -693,6 +729,21 @@ async function proxyAndRewrite(
               }
             } else if (srcUrl.startsWith('/')) {
               newUrl = `${url.origin}${matchedPrefix}${srcUrl}`;
+            } else {
+              const resolved = (() => {
+                try {
+                  return new URL(srcUrl, targetUrl);
+                } catch {
+                  return null;
+                }
+              })();
+
+              if (resolved) {
+                const proxied = buildProxiedUrl(resolved);
+                if (proxied) {
+                  newUrl = proxied;
+                }
+              }
             }
 
             return descriptor ? `${newUrl} ${descriptor}` : newUrl;
