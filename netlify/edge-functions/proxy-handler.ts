@@ -630,6 +630,37 @@ async function proxyAndRewrite(
       }
     };
 
+    const rewriteJsLiteral = (
+      match: string,
+      quote: string,
+      value: string,
+    ) => {
+      try {
+        let resolved: URL | null = null;
+
+        if (value.startsWith('http://') || value.startsWith('https://')) {
+          resolved = new URL(value);
+        } else if (value.startsWith('//')) {
+          resolved = new URL(`${targetUrl.protocol}${value}`);
+        } else if (
+          value.startsWith('/') ||
+          value.startsWith('./') ||
+          value.startsWith('../')
+        ) {
+          resolved = new URL(value, targetUrl);
+        }
+
+        if (!resolved) {
+          return match;
+        }
+
+        const proxied = buildProxiedUrl(resolved);
+        return proxied ? `${quote}${proxied}${quote}` : match;
+      } catch {
+        return match;
+      }
+    };
+
     if (HTML_CONTENT_TYPES.some(type => contentType.includes(type))) {
       content = content.replace(
         new RegExp(`(href|src|action|content)=["']https?://${targetDomain}(/[^"']*?)["']`, 'gi'),
@@ -800,6 +831,11 @@ async function proxyAndRewrite(
       content = content.replace(
         /(['"])(\/[^'"]*?\.(?:js|css|png|jpg|jpeg|gif|svg|webp|ico|json|mp3|mp4|webm|ogg|woff|woff2|ttf|eot))(['"])/gi,
         `$1${url.origin}${matchedPrefix}$2$3`
+      );
+
+      content = content.replace(
+        /(["'`])(https?:\/\/[^"'`]+|\/\/[^"'`]+|\.{1,2}\/[^"'`]+|\/(?!\s)[^"'`]+)(["'`])/gi,
+        (match, quote, jsPath) => rewriteJsLiteral(match, quote, jsPath)
       );
     }
 
