@@ -477,7 +477,12 @@ export default async (request: Request, context: Context) => {
       const response = await fetch(proxyRequest);
       
       // 获取内容类型
-      const contentType = response.headers.get('content-type') || '';
+      let contentType = response.headers.get('content-type') || '';
+      
+      // 强制将 .html 文件识别为 HTML 类型
+      if (path.endsWith('.html') || path.endsWith('.htm')) {
+        contentType = 'text/html; charset=utf-8';
+      }
       
       // 创建新的响应对象，以便我们可以修改头部
       let newResponse: Response;
