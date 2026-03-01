@@ -9,6 +9,7 @@ const PROXY_CONFIG = {
   "/discord": "https://discord.com/api",
   "/telegraph": "https://telegra.ph",
   "/vc": "https://vocechat.xf-yun.cn",
+  "/ao3": "https://ao3-mirror.cc",
   "/mhhf": "https://www.mhhf.com",
   "/cat-baike": "https://lolitalibrary.com",
   "/telegram": "https://api.telegram.org",
@@ -122,6 +123,23 @@ const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: 
         }
         // 相对路径
         return match.replace(`"${path}`, `"/mhhf/${path}`);
+      }
+    },],
+  'www.mhhf.com': [
+    // 替换所有 /css/, /js/, /images/ 等资源路径
+    {
+      pattern: /(?:src|href|content)=['"](?:\.?\/)?([^"']*\.(css|js|png|jpg|jpeg|gif|svg|webp|ico))["']/gi,
+      replacement: (match: string, path: string, ext: string) => {
+        // 如果路径已经以 http 开头，不处理
+        if (path.startsWith('http')) {
+          return match.replace(`"${path}`, `"/proxy/${path}`);
+        }
+        // 如果路径已经以 / 开头，添加前缀
+        if (path.startsWith('/')) {
+          return match.replace(`"/${path.slice(1)}`, `"/ao3/${path.slice(1)}`);
+        }
+        // 相对路径
+        return match.replace(`"${path}`, `"/ao3/${path}`);
       }
     },],
   'vocechat.xf-yun.cn': [
