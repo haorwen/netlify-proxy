@@ -10,6 +10,7 @@ const PROXY_CONFIG = {
   "/telegraph": "https://telegra.ph",
   "/vc": "https://vocechat.xf-yun.cn",
   "/ao3": "https://ao3-mirror.cc",
+  "/ao3o": "https://archiveofourown.org",
   "/mhhf": "https://www.mhhf.com",
   "/cat-baike": "https://lolitalibrary.com",
   "/telegram": "https://api.telegram.org",
@@ -125,7 +126,7 @@ const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: 
         return match.replace(`"${path}`, `"/mhhf/${path}`);
       }
     },],
-  'www.mhhf.com': [
+  'archiveofourown.org': [
     // 替换所有 /css/, /js/, /images/ 等资源路径
     {
       pattern: /(?:src|href|content)=['"](?:\.?\/)?([^"']*\.(css|js|png|jpg|jpeg|gif|svg|webp|ico))["']/gi,
@@ -136,10 +137,10 @@ const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: 
         }
         // 如果路径已经以 / 开头，添加前缀
         if (path.startsWith('/')) {
-          return match.replace(`"/${path.slice(1)}`, `"/ao3/${path.slice(1)}`);
+          return match.replace(`"/${path.slice(1)}`, `"/ao3o/${path.slice(1)}`);
         }
         // 相对路径
-        return match.replace(`"${path}`, `"/ao3/${path}`);
+        return match.replace(`"${path}`, `"/ao3o/${path}`);
       }
     },],
   'vocechat.xf-yun.cn': [
