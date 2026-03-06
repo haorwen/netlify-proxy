@@ -100,16 +100,23 @@ const AO3DOWN_HTML = `<!doctype html>
   <style>
     :root { color-scheme: light dark; --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --primary:#22d3ee; --primary-hover:#06b6d4; --danger:#f87171; }
     @media (prefers-color-scheme: light) { :root { --bg:#f8fafc; --card:#fff; --text:#0f172a; --muted:#64748b; } }
-    * { box-sizing: border-box; } body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:radial-gradient(circle at 20% 20%, #0ea5e980, transparent 35%), var(--bg); color:var(--text); }
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:radial-gradient(circle at 20% 20%, #0ea5e980, transparent 35%), var(--bg); color:var(--text); }
     .card { width:min(760px,100%); background:color-mix(in srgb, var(--card), transparent 8%); border:1px solid color-mix(in srgb, var(--muted), transparent 75%); border-radius:18px; padding:28px; box-shadow:0 20px 60px #00000030; backdrop-filter:blur(8px); }
-    h1 { margin:0 0 8px; font-size:1.6rem; } p { margin:0 0 14px; color:var(--muted); }
+    h1 { margin:0 0 8px; font-size:1.6rem; }
+    p { margin:0 0 14px; color:var(--muted); }
     code { background:color-mix(in srgb, var(--muted), transparent 85%); border-radius:8px; padding:2px 6px; word-break:break-all; }
     .form-wrap { display:grid; grid-template-columns:1fr auto; gap:10px; margin-top:18px; }
     input { width:100%; border:1px solid color-mix(in srgb, var(--muted), transparent 70%); border-radius:10px; padding:12px 14px; font-size:15px; color:var(--text); background:color-mix(in srgb, var(--bg), transparent 15%); }
     button { border:none; border-radius:10px; background:var(--primary); color:#06202a; font-weight:700; padding:0 18px; cursor:pointer; transition:.2s ease; }
-    button:hover { background:var(--primary-hover); } button:disabled { opacity:.7; cursor:not-allowed; }
-    .hint { margin-top:16px; font-size:13px; } .warn { color:var(--danger); }
-    .progress-wrap { margin-top:14px; display:none; } progress { width:100%; height:12px; } .status { margin-top:8px; font-size:13px; color:var(--muted); }
+    button:hover { background:var(--primary-hover); }
+    button:disabled { opacity:.7; cursor:not-allowed; }
+    .hint { margin-top:16px; font-size:13px; }
+    .warn { color:var(--danger); }
+    .progress-wrap { margin-top:14px; display:none; }
+    .bar-bg { width:100%; height:12px; border-radius:999px; background:color-mix(in srgb, var(--muted), transparent 70%); overflow:hidden; }
+    .bar-fill { height:100%; width:0%; border-radius:999px; background:linear-gradient(90deg, var(--primary), #34d399); transition:width .18s linear; }
+    .status { margin-top:8px; font-size:13px; color:var(--muted); }
   </style>
 </head>
 <body>
@@ -121,7 +128,7 @@ const AO3DOWN_HTML = `<!doctype html>
       <button id="submitBtn" type="submit">下载 EPUB</button>
     </form>
     <div id="progressWrap" class="progress-wrap">
-      <progress id="progressBar" max="100" value="0"></progress>
+      <div class="bar-bg"><div id="barFill" class="bar-fill"></div></div>
       <div id="statusText" class="status">等待开始...</div>
     </div>
     <p class="hint">直接下载模式：<code>/ao3down?url={AO3或镜像作品链接}</code>（不显示进度，直接浏览器下载）。</p>
@@ -132,53 +139,88 @@ const AO3DOWN_HTML = `<!doctype html>
     const input = document.getElementById('urlInput');
     const button = document.getElementById('submitBtn');
     const progressWrap = document.getElementById('progressWrap');
-    const progressBar = document.getElementById('progressBar');
+    const barFill = document.getElementById('barFill');
     const statusText = document.getElementById('statusText');
-    const getFilename = (disposition, fallback) => {
-      if (!disposition) return fallback;
-      const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-      if (utf8?.[1]) { try { return decodeURIComponent(utf8[1]); } catch { return utf8[1]; } }
+
+    const getFilename = (resp) => {
+      const explicit = resp.headers.get('x-ao3-filename');
+      if (explicit) {
+        try { return decodeURIComponent(explicit); } catch { return explicit; }
+      }
+      const disposition = resp.headers.get('content-disposition');
+      if (!disposition) return 'ao3-download.epub';
+      const utf8 = disposition.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
+      if (utf8?.[1]) {
+        const raw = utf8[1].trim().replace(/^"|"$/g, '');
+        try { return decodeURIComponent(raw); } catch { return raw; }
+      }
       const plain = disposition.match(/filename="?([^";]+)"?/i);
-      return plain?.[1] || fallback;
+      return plain?.[1] || 'ao3-download.epub';
     };
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const raw = input.value.trim();
       if (!raw) return;
+
       button.disabled = true;
       progressWrap.style.display = 'block';
-      progressBar.value = 0;
+      barFill.style.width = '0%';
       statusText.textContent = '正在请求下载...';
+
       try {
         const endpoint = '/ao3down?download=stream&url=' + encodeURIComponent(raw);
         const resp = await fetch(endpoint);
-        if (!resp.ok) { const err = await resp.text(); throw new Error(err || '下载失败'); }
+        if (!resp.ok) {
+          const err = await resp.text();
+          throw new Error(err || '下载失败');
+        }
+
         const total = Number(resp.headers.get('content-length'));
         const reader = resp.body?.getReader();
         if (!reader) throw new Error('浏览器不支持流式下载');
-        const chunks = []; let loaded = 0;
+
+        const chunks = [];
+        let loaded = 0;
+        let shownPercent = 0;
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          chunks.push(value); loaded += value.byteLength;
+          chunks.push(value);
+          loaded += value.byteLength;
+
           if (total > 0) {
-            const percent = Math.min(100, Math.round((loaded / total) * 100));
-            progressBar.value = percent;
-            statusText.textContent = '下载中：' + percent + '%';
+            const target = Math.min(100, (loaded / total) * 100);
+            shownPercent = shownPercent + (target - shownPercent) * 0.35;
+            if (target - shownPercent < 0.8) shownPercent = target;
+            const p = Math.max(0, Math.min(100, shownPercent));
+            barFill.style.width = p.toFixed(2) + '%';
+            statusText.textContent = '下载中：' + target.toFixed(1) + '%';
           } else {
+            barFill.style.width = '100%';
             statusText.textContent = '下载中：' + (loaded / 1024 / 1024).toFixed(2) + ' MB';
           }
         }
+
         const blob = new Blob(chunks, { type: 'application/epub+zip' });
-        const fileName = getFilename(resp.headers.get('content-disposition'), 'ao3-download.epub');
+        const fileName = getFilename(resp);
         const blobUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = blobUrl; a.download = fileName; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(blobUrl);
-        progressBar.value = 100;
+        a.href = blobUrl;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+
+        barFill.style.width = '100%';
         statusText.textContent = '下载完成：' + fileName;
       } catch (error) {
         statusText.textContent = '下载失败：' + (error?.message || error);
-      } finally { button.disabled = false; }
+      } finally {
+        button.disabled = false;
+      }
     });
   </script>
 </body>
@@ -208,6 +250,12 @@ function extractAo3WorkId(inputUrl: string): string | null {
 
   const match = parsed.pathname.match(/\/works\/(\d+)/);
   return match?.[1] ?? null;
+}
+
+function toAsciiFilename(name: string): string {
+  const safe = name.replace(/[\r\n]/g, ' ').trim();
+  const ascii = safe.replace(/[^\x20-\x7E]/g, '_').replace(/[\\/:*?"<>|]/g, '_');
+  return ascii || 'ao3-download.epub';
 }
 
 function pickFilenameFromContentDisposition(contentDisposition: string | null, fallback: string): string {
@@ -508,7 +556,8 @@ export default async (request: Request, context: Context) => {
 
     const responseHeaders = new Headers(upstreamResponse.headers);
     responseHeaders.set('Content-Type', 'application/epub+zip');
-    responseHeaders.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    responseHeaders.set('Content-Disposition', `attachment; filename="${toAsciiFilename(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    responseHeaders.set('X-AO3-Filename', encodeURIComponent(filename));
     responseHeaders.set('Access-Control-Allow-Origin', '*');
     responseHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate');
 
