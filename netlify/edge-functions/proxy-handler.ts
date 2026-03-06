@@ -90,6 +90,145 @@ self.addEventListener('fetch', (event) => {
   );
 });
 `;// 特定网站的替换规则 (针对某些站点的特殊处理)
+
+const AO3DOWN_HTML = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AO3 EPUB 下载器</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --primary: #22d3ee;
+      --primary-hover: #06b6d4;
+      --danger: #f87171;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --text: #0f172a;
+        --muted: #64748b;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 20% 20%, #0ea5e980, transparent 35%), var(--bg);
+      color: var(--text);
+    }
+    .card {
+      width: min(760px, 100%);
+      background: color-mix(in srgb, var(--card), transparent 8%);
+      border: 1px solid color-mix(in srgb, var(--muted), transparent 75%);
+      border-radius: 18px;
+      padding: 28px;
+      box-shadow: 0 20px 60px #00000030;
+      backdrop-filter: blur(8px);
+    }
+    h1 { margin: 0 0 8px; font-size: 1.6rem; }
+    p { margin: 0 0 14px; color: var(--muted); }
+    code {
+      background: color-mix(in srgb, var(--muted), transparent 85%);
+      border-radius: 8px;
+      padding: 2px 6px;
+    }
+    .form-wrap {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      margin-top: 18px;
+    }
+    input {
+      width: 100%;
+      border: 1px solid color-mix(in srgb, var(--muted), transparent 70%);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 15px;
+      color: var(--text);
+      background: color-mix(in srgb, var(--bg), transparent 15%);
+    }
+    button {
+      border: none;
+      border-radius: 10px;
+      background: var(--primary);
+      color: #06202a;
+      font-weight: 700;
+      padding: 0 18px;
+      cursor: pointer;
+      transition: 0.2s ease;
+    }
+    button:hover { background: var(--primary-hover); }
+    .hint { margin-top: 16px; font-size: 13px; }
+    .warn { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>AO3 EPUB 下载器</h1>
+    <p>输入 AO3 作品链接（例如 <code>https://archiveofourown.org/works/12345678</code>），点击下载即可直接返回 <code>.epub</code> 文件。</p>
+    <form class="form-wrap" action="/ao3down" method="GET">
+      <input name="url" type="url" required placeholder="粘贴 AO3 作品地址（/works/数字）" />
+      <button type="submit">下载 EPUB</button>
+    </form>
+    <p class="hint">也可直接使用：<code>/ao3down?url={AO3作品链接}</code> 跳过前端。</p>
+    <p class="hint warn">提示：仅支持公开作品。</p>
+  </main>
+</body>
+</html>`;
+
+function extractAo3WorkId(inputUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(inputUrl);
+  } catch {
+    return null;
+  }
+
+  const validHosts = new Set([
+    'archiveofourown.org',
+    'www.archiveofourown.org',
+    'ao3-mirror.cc',
+    'nightalk.cc'
+  ]);
+
+  if (!validHosts.has(parsed.hostname)) {
+    return null;
+  }
+
+  const match = parsed.pathname.match(/\/works\/(\d+)/);
+  return match?.[1] ?? null;
+}
+
+function pickFilenameFromContentDisposition(contentDisposition: string | null, fallback: string): string {
+  if (!contentDisposition) {
+    return fallback;
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] ?? fallback;
+}
+
+// 特定网站的替换规则 (针对某些站点的特殊处理)
 const SPECIAL_REPLACEMENTS: Record<string, Array<{pattern: RegExp, replacement: Function}>> = {
   // ... （此处省略了您原有的 SPECIAL_REPLACEMENTS 内容，保持不变）
   'telegra.ph': [
@@ -309,6 +448,73 @@ export default async (request: Request, context: Context) => {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-cache, no-store, must-revalidate"
       }
+    });
+  }
+
+  if (path === '/ao3down') {
+    const rawInputUrl = url.searchParams.get('url')?.trim() ?? '';
+
+    if (!rawInputUrl) {
+      context.log('Serving AO3 download page.');
+      return new Response(AO3DOWN_HTML, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        }
+      });
+    }
+
+    const workId = extractAo3WorkId(rawInputUrl);
+    if (!workId) {
+      return new Response('无效的 AO3 作品链接，请提供 /works/{id} 格式。', {
+        status: 400,
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
+    const downloadUrl = `https://archiveofourown.org/downloads/${workId}/work.epub`;
+    context.log(`Downloading AO3 epub: ${downloadUrl}`);
+
+    const forwardHeaders = new Headers();
+    forwardHeaders.set('User-Agent', request.headers.get('user-agent') ?? 'Mozilla/5.0 (Netlify Edge AO3 Downloader)');
+    forwardHeaders.set('Accept', 'application/epub+zip,*/*;q=0.8');
+    forwardHeaders.set('Referer', `https://archiveofourown.org/works/${workId}`);
+
+    const upstreamResponse = await fetch(downloadUrl, {
+      method: 'GET',
+      headers: forwardHeaders,
+      redirect: 'follow'
+    });
+
+    if (!upstreamResponse.ok) {
+      const errBody = await upstreamResponse.text();
+      context.log(`AO3 download failed: ${upstreamResponse.status} ${errBody.slice(0, 300)}`);
+      return new Response('下载失败：上游返回错误，请确认作品可公开访问。', {
+        status: 502,
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
+    const fallbackName = `ao3-work-${workId}.epub`;
+    const upstreamDisposition = upstreamResponse.headers.get('content-disposition');
+    const filename = pickFilenameFromContentDisposition(upstreamDisposition, fallbackName);
+
+    const responseHeaders = new Headers(upstreamResponse.headers);
+    responseHeaders.set('Content-Type', 'application/epub+zip');
+    responseHeaders.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    responseHeaders.set('Access-Control-Allow-Origin', '*');
+    responseHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+    return new Response(upstreamResponse.body, {
+      status: 200,
+      headers: responseHeaders
     });
   }
 
